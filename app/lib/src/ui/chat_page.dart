@@ -113,6 +113,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                       final message = session.messages[i];
                       return MessageView(
                         message: message,
+                        expectedModel: session.chat.model?.id,
                         onRetry: _controller.retryLast,
                         onToggleInclude: () =>
                             _controller.toggleInclude(message),

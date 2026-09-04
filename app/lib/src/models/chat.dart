@@ -107,6 +107,11 @@ class ChatMetrics {
   Fact<double> get tokensPerSecond => Fact.asDouble(raw['tokens_per_second']);
   Fact<String> get stopReason => Fact.asString(raw['stop_reason']);
 
+  /// Das Modell, das laut Backend geantwortet hat. LM Studio beantwortet
+  /// jeden Namen mit dem gerade geladenen Modell — ohne dieses Feld bliebe
+  /// unbemerkt, dass die Antwort von einem anderen stammt als gewählt.
+  Fact<String> get servedModel => Fact.asString(raw['served_model']);
+
   String encode() => jsonEncode(raw);
 
   static ChatMetrics? decode(String? source) {

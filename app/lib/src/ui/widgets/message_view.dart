@@ -11,10 +11,15 @@ class MessageView extends StatelessWidget {
     required this.onRetry,
     required this.onToggleInclude,
     required this.onUndoSummary,
+    this.expectedModel,
     super.key,
   });
 
   final ChatMessage message;
+
+  /// Das für diesen Chat gewählte Modell. Weicht die Antwort davon ab, wird
+  /// das angezeigt statt verschwiegen.
+  final String? expectedModel;
   final VoidCallback onRetry;
   final VoidCallback onToggleInclude;
   final VoidCallback onUndoSummary;
@@ -107,6 +112,10 @@ class MessageView extends StatelessWidget {
             ),
           if (message.metrics != null && !message.isRunning)
             _MetricsRow(metrics: message.metrics!),
+          if (!message.isRunning) _ModellAbweichung(
+            metrics: message.metrics,
+            expected: expectedModel,
+          ),
         ],
       ),
     );
@@ -456,6 +465,45 @@ class _ReasoningState extends State<_Reasoning> {
                 ),
               ),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+
+/// Hinweis, wenn ein anderes Modell geantwortet hat als gewählt.
+///
+/// LM Studio beantwortet jeden Namen mit dem gerade geladenen Modell — auch
+/// einen, den es gar nicht gibt, und ohne Fehler. Der gewählte Name ist dort
+/// keine Zusage, also darf die Oberfläche ihn nicht als eine darstellen.
+class _ModellAbweichung extends StatelessWidget {
+  const _ModellAbweichung({required this.metrics, required this.expected});
+
+  final ChatMetrics? metrics;
+  final String? expected;
+
+  @override
+  Widget build(BuildContext context) {
+    final served = metrics?.servedModel;
+    if (served == null || !served.isKnown || expected == null) {
+      return const SizedBox.shrink();
+    }
+    if (served.value == expected) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 5),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.swap_horiz, size: 13, color: Tone.amber),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              'Geantwortet hat ${served.value} — gewählt war $expected',
+              style: const TextStyle(fontSize: 11.5, color: Tone.amber),
+            ),
+          ),
         ],
       ),
     );
