@@ -1,0 +1,85 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gateway:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r gateway/requirements.txt pytest
+      - run: python -m pytest gateway/tests -q
+
+  app-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      # Die Tests brauchen keine Plattformordner - nur die Pakete.
+      - run: flutter pub get
+      - run: flutter analyze --no-fatal-infos
+      - run: flutter test
+
+  android:
+    needs: [gateway, app-test]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      # Die Plattformordner liegen nicht im Repo, damit der Baum schlank
+      # bleibt - sie werden hier erzeugt.
+      # `flutter create` legt ein widget_test.dart fuer eine Beispiel-App an,
+      # das gegen diesen Baum nicht kompiliert.
+      - run: flutter create --platforms=android --org de.nicolas .
+      - run: rm -f test/widget_test.dart
+      - run: flutter pub get
+      - run: flutter build apk --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: app/build/app/outputs/flutter-apk/app-release.apk
+
+  windows:
+    needs: [gateway, app-test]
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: flutter create --platforms=windows --org de.nicolas .
+      # Auf windows-latest ist die Standardshell PowerShell, dort gibt es
+      # kein `rm -f`.
+      - run: rm -f test/widget_test.dart
+        shell: bash
+      - run: flutter pub get
+      - run: flutter build windows --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: app/build/windows/x64/runner/Release/
