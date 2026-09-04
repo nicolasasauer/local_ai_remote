@@ -11,8 +11,8 @@ from typing import AsyncIterator
 
 import httpx
 import uvicorn
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket
-from fastapi.responses import StreamingResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.websockets import WebSocketDisconnect
 
 from .backends.base import (
@@ -27,6 +27,7 @@ from .backends.base import (
 from .backends.lmstudio import LmStudioBackend
 from .backends.ollama import OllamaBackend
 from .config import CONFIG, ConfigError
+from .openai_api import router as openai_router
 from .schema import (
     BackendId,
     ChatRequest,
@@ -52,6 +53,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     _http = httpx.AsyncClient(timeout=CONFIG.request_timeout)
     _backends[BackendId.ollama] = OllamaBackend(CONFIG.ollama_url, _http)
     _backends[BackendId.lmstudio] = LmStudioBackend(CONFIG.lmstudio_url, _http)
+    # Der OpenAI-Router greift ueber den App-Zustand darauf zu, statt das
+    # Modul-Global zu importieren - so laesst er sich im Test austauschen.
+    app.state.backends = _backends
     try:
         yield
     finally:
@@ -59,6 +63,33 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Local AI Gateway", version=VERSION, lifespan=lifespan)
+app.include_router(openai_router)
+
+
+@app.middleware("http")
+async def _limit_body(request: Request, call_next):
+    """Obergrenze fuer den Anfragekoerper.
+
+    Agenten-Werkzeuge schicken ganze Projektdateien mit. Ohne Grenze zieht
+    eine einzige verirrte Anfrage den Speicher des Desktops leer - und der
+    Desktop ist hier auch der Rechner, auf dem das Modell laeuft.
+    """
+    raw = request.headers.get("content-length")
+    if raw and raw.isdigit() and int(raw) > CONFIG.max_request_bytes:
+        return JSONResponse(
+            status_code=413,
+            content={
+                "error": {
+                    "message": (
+                        f"Anfrage ist groesser als das Limit von "
+                        f"{CONFIG.max_request_bytes} Bytes "
+                        "(GATEWAY_MAX_REQUEST_BYTES)."
+                    ),
+                    "type": "invalid_request_error",
+                }
+            },
+        )
+    return await call_next(request)
 
 
 def require_token(authorization: str | None = Header(default=None)) -> None:
@@ -246,6 +277,16 @@ def run() -> None:
         CONFIG.check()
     except ConfigError as exc:
         raise SystemExit(f"Start abgebrochen: {exc}")
+    if CONFIG.agents_enabled:
+        print(
+            "OpenAI-kompatible Oberflaeche aktiv unter "
+            f"http://{CONFIG.bind_host}:{CONFIG.bind_port}/openai/v1"
+        )
+    else:
+        print(
+            "OpenAI-kompatible Oberflaeche aus "
+            "(GATEWAY_AGENT_TOKEN setzen, um sie einzuschalten)"
+        )
     uvicorn.run(app, host=CONFIG.bind_host, port=CONFIG.bind_port, log_level="info")
 
 

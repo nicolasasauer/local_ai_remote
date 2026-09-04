@@ -9,6 +9,11 @@ WebSockets nicht überall zuverlässig).
 
 Backend-Kennungen: `ollama` | `lmstudio`
 
+Daneben gibt es unter `/openai/v1` eine zweite, davon unabhaengige Oberflaeche
+im Chat-Completions-Format fuer Agenten-Werkzeuge. Sie hat ein eigenes Token,
+eigene Rechte und ein eigenes Dokument: [AGENTS.md](AGENTS.md). Die App
+benutzt sie nicht.
+
 ---
 
 ## GET /v1/health

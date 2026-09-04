@@ -59,6 +59,16 @@ In den Einstellungen dann die `tailscale serve`-URL und den Token eintragen.
 | `app/lib/src/chat/` | Zustandsmaschine des Sendevorgangs, Kontextverdichtung |
 | `app/lib/src/ui/` | Oberfläche |
 | `API_CONTRACT.md` | Schnittstelle zwischen beiden Hälften |
+| `AGENTS.md` | OpenAI-kompatible Oberfläche und ihr Sicherheitsmodell |
+| `TESTING.md` | was automatisiert läuft, was von Hand geprüft wird |
+
+## Agenten-Werkzeuge
+
+Unter `/openai/v1` spricht das Gateway zusätzlich das
+Chat-Completions-Format, damit sich Werkzeuge wie Aider oder Continue auf die
+lokalen Modelle richten lassen. Die Oberfläche ist standardmäßig aus und
+braucht ein **eigenes** Token — Details und Sicherheitsmodell in
+[AGENTS.md](AGENTS.md).
 
 ## Leitgedanken
 
@@ -82,11 +92,15 @@ was gesendet wird; die Originale bleiben in SQLite.
 
 ## Stand
 
-Der Code ist vollständig, aber noch nicht gegen echte Server gelaufen. Vor dem
-ersten Start erwarten dich vermutlich:
+Beide Hälften laufen gegen echte Server: Ollama 0.33 und LM Studio, Chat mit
+Denkschritten, Telemetrie, Modellverwaltung, geprüft auf dem Android-Emulator
+und unter Windows. `flutter analyze` ist sauber, Tests siehe
+[TESTING.md](TESTING.md).
 
-- `flutter analyze` findet Kleinigkeiten (fehlende Imports, Typen an den
-  Rändern) — der Baum wurde ohne Flutter-SDK geschrieben
+Offen:
+
+- Tool-Calling fehlt, damit auch Agenten-CLIs, die Werkzeuge aufrufen
+  (siehe [AGENTS.md](AGENTS.md))
 - das JSON-Schema von `amdgpu_top` variiert zwischen Versionen; einmal
   `amdgpu_top --json --single` laufen lassen und `_probe_amdgpu_top()` abgleichen
 - Entladen bei LM Studio geht nur über die CLI (`lms`), das Gateway meldet

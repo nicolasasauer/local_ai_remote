@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gateway import main as gw
+from gateway import openai_api
 from gateway.backends.base import Backend, Delta, Done, Reasoning, Status
 from gateway.config import Config, ConfigError, _load_env_file
 from gateway.schema import (
@@ -38,6 +39,9 @@ class FakeBackend(Backend):
         self.id = backend_id
         self.fail_models = fail_models
         self.seen: list[ChatRequest] = []
+        #: Wenn gesetzt, antwortet die Attrappe mit einem anderen Modell -
+        #: so verhaelt sich LM Studio, wenn ein anderes geladen ist.
+        self.served_model: str | None = None
 
     async def health(self) -> BackendHealth:
         return BackendHealth(backend=self.id, reachable=True, version=Fact.of("1.0"))
@@ -62,7 +66,12 @@ class FakeBackend(Backend):
         yield Reasoning("erst denken")
         yield Delta("dann ")
         yield Delta("antworten")
-        yield Done(ChatMetrics(total_ms=Fact.of(12.0)))
+        yield Done(
+            ChatMetrics(
+                total_ms=Fact.of(12.0),
+                served_model=Fact.of(self.served_model or req.model),
+            )
+        )
 
     async def set_keep_alive(self, model: str, *, pin: bool) -> None:
         return None
@@ -79,7 +88,11 @@ def backends():
 @pytest.fixture
 def client(backends, monkeypatch):
     # Config ist frozen, also die ganze Instanz ersetzen statt eines Feldes.
-    monkeypatch.setattr(gw, "CONFIG", dataclasses.replace(gw.CONFIG, token=TOKEN))
+    # agent_token bewusst leer: sonst entscheidet eine lokale .env darueber,
+    # ob die Agenten-Oberflaeche im Test existiert.
+    cfg = dataclasses.replace(gw.CONFIG, token=TOKEN, agent_token="")
+    monkeypatch.setattr(gw, "CONFIG", cfg)
+    monkeypatch.setattr(openai_api, "CONFIG", cfg)
     with TestClient(gw.app) as c:
         # Nach dem startup-Hook setzen, sonst ueberschreiben ihn die echten
         # Adapter wieder.
@@ -117,15 +130,17 @@ class TestAuth:
 
 
 class TestConfig:
-    def _cfg(self, token: str) -> Config:
+    def _cfg(self, token: str, agent_token: str = "") -> Config:
         return Config(
             token=token,
+            agent_token=agent_token,
             ollama_url="",
             lmstudio_url="",
             bind_host="0.0.0.0",
             bind_port=1,
             request_timeout=1,
             telemetry_interval=1,
+            max_request_bytes=1024,
         )
 
     def test_leerer_token_wird_abgelehnt(self):
@@ -138,6 +153,23 @@ class TestConfig:
 
     def test_langer_token_geht_durch(self):
         self._cfg(TOKEN).check()
+
+    def test_agenten_oberflaeche_ist_ohne_token_aus(self):
+        assert self._cfg(TOKEN).agents_enabled is False
+
+    def test_kurzes_agenten_token_wird_abgelehnt(self):
+        with pytest.raises(ConfigError, match="GATEWAY_AGENT_TOKEN"):
+            self._cfg(TOKEN, agent_token="kurz").check()
+
+    def test_gleiches_agenten_token_wird_abgelehnt(self):
+        # Sonst laesst sich der Agentenzugang nicht getrennt zurueckziehen.
+        with pytest.raises(ConfigError, match="identisch"):
+            self._cfg(TOKEN, agent_token=TOKEN).check()
+
+    def test_eigenes_agenten_token_schaltet_die_oberflaeche_ein(self):
+        cfg = self._cfg(TOKEN, agent_token="agent-token-mit-genug-laenge")
+        cfg.check()
+        assert cfg.agents_enabled is True
 
     def test_env_datei_wird_gelesen(self, tmp_path, monkeypatch):
         # Ohne dieses Laden bliebe GATEWAY_TOKEN leer und die Auth still aus.
@@ -210,3 +242,180 @@ class TestChat:
     def test_think_ist_ohne_angabe_offen(self, client, backends):
         _chat(client)
         assert backends[BackendId.ollama].seen[-1].think is None
+
+
+# ---------------------------------------------------------------------------
+# OpenAI-kompatible Oberflaeche
+# ---------------------------------------------------------------------------
+
+AGENT_TOKEN = "agent-token-mit-genug-laenge"
+
+
+@pytest.fixture
+def agent_client(backends, monkeypatch):
+    cfg = dataclasses.replace(gw.CONFIG, token=TOKEN, agent_token=AGENT_TOKEN)
+    # Beide Module halten eine eigene Referenz auf CONFIG.
+    monkeypatch.setattr(gw, "CONFIG", cfg)
+    monkeypatch.setattr(openai_api, "CONFIG", cfg)
+    with TestClient(gw.app) as c:
+        gw.app.state.backends = backends
+        yield c
+
+
+def agent_auth() -> dict:
+    return {"Authorization": "Bearer " + AGENT_TOKEN}
+
+
+class TestOpenAiAuth:
+    def test_ohne_agenten_token_ist_die_oberflaeche_nicht_da(self, client):
+        # `client` setzt kein GATEWAY_AGENT_TOKEN: die Routen sollen sich
+        # verhalten, als gaebe es sie nicht.
+        r = client.get("/openai/v1/models", headers=auth())
+        assert r.status_code == 404
+
+    def test_app_token_oeffnet_die_agenten_oberflaeche_nicht(self, agent_client):
+        # Der ganze Zweck des getrennten Tokens.
+        r = agent_client.get("/openai/v1/models", headers=auth())
+        assert r.status_code == 401
+
+    def test_agenten_token_oeffnet_die_app_api_nicht(self, agent_client):
+        r = agent_client.get("/v1/health", headers=agent_auth())
+        assert r.status_code == 401
+
+    def test_mit_agenten_token_200(self, agent_client):
+        assert agent_client.get("/openai/v1/models", headers=agent_auth()).status_code == 200
+
+    def test_fehler_kommt_im_openai_format(self, agent_client):
+        r = agent_client.get("/openai/v1/models", headers={"Authorization": "Bearer x"})
+        assert r.status_code == 401
+        assert r.json()["detail"]["error"]["message"]
+
+
+class TestOpenAiModels:
+    def test_modelle_tragen_ihr_backend_im_namen(self, agent_client):
+        data = agent_client.get("/openai/v1/models", headers=agent_auth()).json()
+
+        assert data["object"] == "list"
+        ids = {m["id"] for m in data["data"]}
+        assert ids == {"ollama/m1", "lmstudio/m1"}
+        assert all(m["object"] == "model" for m in data["data"])
+
+    def test_totes_backend_leert_die_liste_nicht(self, agent_client, backends):
+        backends[BackendId.lmstudio].fail_models = True
+        data = agent_client.get("/openai/v1/models", headers=agent_auth()).json()
+        assert [m["id"] for m in data["data"]] == ["ollama/m1"]
+
+
+def _completion(agent_client, **extra):
+    body = {"model": "ollama/m1", "messages": [{"role": "user", "content": "hi"}]}
+    body.update(extra)
+    return agent_client.post("/openai/v1/chat/completions", headers=agent_auth(), json=body)
+
+
+class TestOpenAiChat:
+    def test_antwort_ohne_streaming(self, agent_client):
+        data = _completion(agent_client).json()
+
+        assert data["object"] == "chat.completion"
+        assert data["model"] == "ollama/m1"
+        choice = data["choices"][0]
+        assert choice["message"]["content"] == "dann antworten"
+        assert choice["finish_reason"] == "stop"
+
+    def test_denkschritte_stehen_getrennt_vom_antworttext(self, agent_client):
+        message = _completion(agent_client).json()["choices"][0]["message"]
+
+        assert message["reasoning_content"] == "erst denken"
+        assert "erst denken" not in message["content"]
+
+    def test_stream_endet_mit_done_marke(self, agent_client):
+        r = _completion(agent_client, stream=True)
+        roh = [l[5:].strip() for l in r.text.splitlines() if l.startswith("data:")]
+
+        assert roh[-1] == "[DONE]"
+        chunks = [json.loads(x) for x in roh[:-1]]
+        assert chunks[0]["choices"][0]["delta"] == {"role": "assistant"}
+        assert all(c["object"] == "chat.completion.chunk" for c in chunks)
+
+        text = "".join(
+            c["choices"][0]["delta"].get("content", "")
+            for c in chunks
+            if c["choices"]
+        )
+        assert text == "dann antworten"
+        assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
+
+    def test_stream_traegt_denkschritte_in_eigenem_feld(self, agent_client):
+        r = _completion(agent_client, stream=True)
+        chunks = [
+            json.loads(l[5:]) for l in r.text.splitlines()
+            if l.startswith("data:") and l[5:].strip() != "[DONE]"
+        ]
+        reasoning = "".join(
+            c["choices"][0]["delta"].get("reasoning_content", "")
+            for c in chunks if c["choices"]
+        )
+        assert reasoning == "erst denken"
+
+    def test_unbekanntes_modell_gibt_404_mit_hinweis(self, agent_client):
+        r = _completion(agent_client, model="gibtsnicht")
+        assert r.status_code == 404
+        assert "Praefix" in r.json()["detail"]["error"]["message"]
+
+    def test_mehrdeutiges_modell_verlangt_praefix(self, agent_client):
+        # "m1" gibt es auf beiden Attrappen.
+        r = _completion(agent_client, model="m1")
+        assert r.status_code == 400
+        assert "mehreren Backends" in r.json()["detail"]["error"]["message"]
+
+    def test_unbekannte_felder_kippen_die_anfrage_nicht(self, agent_client):
+        # Clients schicken presence_penalty, logit_bias, user, seed ...
+        r = _completion(
+            agent_client, presence_penalty=0.5, logit_bias={}, user="wer", seed=7
+        )
+        assert r.status_code == 200
+
+    def test_max_completion_tokens_wird_verstanden(self, agent_client, backends):
+        _completion(agent_client, max_completion_tokens=64)
+        assert backends[BackendId.ollama].seen[-1].max_tokens == 64
+
+    def test_bilder_nur_als_data_url(self, agent_client, backends):
+        # Eine fremde URL wuerde das Gateway zu einem Downloader machen, der
+        # Adressen aus dem Nachrichteninhalt abruft.
+        _completion(
+            agent_client,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "was ist das"},
+                    {"type": "image_url",
+                     "image_url": {"url": "data:image/png;base64,AAAA"}},
+                    {"type": "image_url",
+                     "image_url": {"url": "https://example.invalid/bild.png"}},
+                ],
+            }],
+        )
+        gesehen = backends[BackendId.ollama].seen[-1].messages[0]
+        assert gesehen.images == ["AAAA"]
+        assert gesehen.content == "was ist das"
+
+    def test_antwort_nennt_das_modell_das_wirklich_geantwortet_hat(
+        self, agent_client, backends
+    ):
+        # LM Studio beantwortet jeden Namen mit dem geladenen Modell. Den
+        # angefragten zurueckzugeben waere eine Behauptung.
+        backends[BackendId.ollama].served_model = "ein-ganz-anderes"
+        data = _completion(agent_client).json()
+
+        assert data["model"] == "ollama/ein-ganz-anderes"
+
+    def test_stream_nennt_ebenfalls_das_tatsaechliche_modell(
+        self, agent_client, backends
+    ):
+        backends[BackendId.ollama].served_model = "ein-ganz-anderes"
+        r = _completion(agent_client, stream=True)
+        chunks = [
+            json.loads(l[5:]) for l in r.text.splitlines()
+            if l.startswith("data:") and l[5:].strip() != "[DONE]"
+        ]
+        assert chunks[-1]["model"] == "ollama/ein-ganz-anderes"

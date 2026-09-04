@@ -11,6 +11,11 @@ python -m pytest gateway/tests -q     # Gateway, ohne laufende Backends
 cd app && flutter test                # App, ohne Gerät
 ```
 
+Die Adapter-Tests nutzen `httpx.MockTransport` und prüfen dabei auch, **was
+das Gateway sendet** — nicht nur, wie es die Antwort liest. Zwei der bisher
+gefundenen Fehler sassen genau dort: Ollama liefert Denkschritte nur auf
+Anforderung, LM Studio Tokenzahlen nur auf Anforderung.
+
 Beide laufen offline: die Backends sind im Gateway-Test durch Attrappen
 ersetzt, die App-Tests nutzen eine SQLite-Datenbank im Arbeitsspeicher.
 
@@ -19,6 +24,8 @@ ersetzt, die App-Tests nutzen eine SQLite-Datenbank im Arbeitsspeicher.
 | Datei | Prüft |
 |---|---|
 | `gateway/tests/test_gateway.py` | Auth (401 ohne/mit falschem Token, WebSocket), `.env`-Laden und Fail-Fast bei leerem oder kurzem Token, `reasoning` als eigener Event-Typ, `think`-Durchreichung, ausgefallenes Backend blockiert die Modellliste nicht, `Fact`-Lücken tragen eine Begründung |
+| `gateway/tests/test_backends.py` | was die Adapter tatsächlich senden und wie sie die Antwort lesen — `think` bei Ollama, `stream_options` bei LM Studio, Denkschritte getrennt vom Antworttext, Modellverwechslung |
+| `app/test/gateway_client_test.dart` | SSE-Zerlegung, Denkschritte als eigener Ereignistyp, Fehler mitten im Stream, und dass ein Abbruch die Verbindung wirklich schliesst |
 | `app/test/chat_store_test.dart` | Umbenennen und Modellwechsel lassen den Verlauf stehen, Löschen räumt Nachrichten mit ab, `recoverInterrupted` markiert hängengebliebene Antworten, Denkschritte werden getrennt vom Antworttext persistiert |
 
 Die beiden `upsertChat`-Tests sind gegen die alte Implementierung gegengeprüft:

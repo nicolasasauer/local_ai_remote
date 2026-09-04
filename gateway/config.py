@@ -38,18 +38,26 @@ class ConfigError(RuntimeError):
 @dataclass(frozen=True)
 class Config:
     token: str
+
+    #: Getrenntes Token fuer die OpenAI-kompatible Oberflaeche. Leer heisst:
+    #: diese Oberflaeche gibt es nicht. Agenten-Werkzeuge legen ihren
+    #: Schluessel im Klartext ab; ein eigenes Token laesst sich zurueckziehen,
+    #: ohne die App neu einzurichten.
+    agent_token: str
     ollama_url: str
     lmstudio_url: str
     bind_host: str
     bind_port: int
     request_timeout: float
     telemetry_interval: float
+    max_request_bytes: int
 
     @classmethod
     def from_env(cls) -> "Config":
         _load_env_file()
         return cls(
             token=os.getenv("GATEWAY_TOKEN", "").strip(),
+            agent_token=os.getenv("GATEWAY_AGENT_TOKEN", "").strip(),
             ollama_url=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/"),
             lmstudio_url=os.getenv("LMSTUDIO_URL", "http://127.0.0.1:1234").rstrip("/"),
             # Standardmaessig nur lokal: tailscale serve reicht die Verbindung
@@ -58,6 +66,10 @@ class Config:
             bind_port=int(os.getenv("GATEWAY_PORT", "8765")),
             request_timeout=float(os.getenv("GATEWAY_TIMEOUT", "600")),
             telemetry_interval=float(os.getenv("TELEMETRY_INTERVAL", "1.0")),
+            # Agenten-Werkzeuge schicken grosse Prompts. Eine Obergrenze
+            # schuetzt den Desktop davor, sich an einer einzigen Anfrage
+            # den Speicher vollzuladen.
+            max_request_bytes=int(os.getenv("GATEWAY_MAX_REQUEST_BYTES", str(32 * 1024 * 1024))),
         )
 
     def check(self) -> None:
@@ -73,6 +85,22 @@ class Config:
                 f"GATEWAY_TOKEN ist mit {len(self.token)} Zeichen zu kurz; "
                 "mindestens 16 verwenden."
             )
+        if self.agent_token:
+            if len(self.agent_token) < 16:
+                raise ConfigError(
+                    f"GATEWAY_AGENT_TOKEN ist mit {len(self.agent_token)} Zeichen "
+                    "zu kurz; mindestens 16 verwenden."
+                )
+            if self.agent_token == self.token:
+                raise ConfigError(
+                    "GATEWAY_AGENT_TOKEN ist mit GATEWAY_TOKEN identisch. Dann "
+                    "laesst sich der Agentenzugang nicht getrennt zurueckziehen "
+                    "- bitte ein eigenes Geheimnis verwenden."
+                )
+
+    @property
+    def agents_enabled(self) -> bool:
+        return bool(self.agent_token)
 
 
 CONFIG = Config.from_env()
