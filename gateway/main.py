@@ -66,6 +66,23 @@ app = FastAPI(title="Local AI Gateway", version=VERSION, lifespan=lifespan)
 app.include_router(openai_router)
 
 
+@app.exception_handler(HTTPException)
+async def _fehlerhuelle(request: Request, exc: HTTPException) -> JSONResponse:
+    """OpenAI-Clients lesen `error.message` auf oberster Ebene.
+
+    FastAPI verpackt jedes `detail` zusaetzlich in ein `detail`-Objekt. Fuer
+    die App-API ist das egal, fuer Werkzeuge nicht: sie finden die Meldung
+    dann nicht und zeigen "unknown error".
+    """
+    if isinstance(exc.detail, dict) and "error" in exc.detail:
+        return JSONResponse(status_code=exc.status_code, content=exc.detail)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=getattr(exc, "headers", None),
+    )
+
+
 @app.middleware("http")
 async def _limit_body(request: Request, call_next):
     """Obergrenze fuer den Anfragekoerper.

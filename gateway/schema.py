@@ -144,7 +144,15 @@ class ChatRequest(BaseModel):
     model: str
     messages: list[ChatMessage]
     temperature: Optional[float] = None
+    top_p: Optional[float] = None
     max_tokens: Optional[int] = None
+    #: Sequenzen, bei denen die Generierung endet.
+    stop: list[str] = Field(default_factory=list)
+    seed: Optional[int] = None
+    presence_penalty: Optional[float] = None
+    frequency_penalty: Optional[float] = None
+    #: Antwort als JSON erzwingen (OpenAI: ``response_format``).
+    json_mode: bool = False
 
     #: Denkschritte anfordern. ``None`` heisst: das Gateway entscheidet anhand
     #: der Faehigkeiten des Modells. Ollama liefert ``thinking`` nur, wenn es

@@ -254,13 +254,28 @@ class OllamaBackend(Backend):
         if think:
             payload["think"] = True
 
+        # Was der Aufrufer setzt, wird gesetzt. Ein still verworfener
+        # Parameter erzeugt eine Antwort, die anders zustande kam als
+        # angefordert - und niemand sieht warum.
         options: dict[str, Any] = {}
         if req.temperature is not None:
             options["temperature"] = req.temperature
+        if req.top_p is not None:
+            options["top_p"] = req.top_p
         if req.max_tokens is not None:
             options["num_predict"] = req.max_tokens
+        if req.stop:
+            options["stop"] = req.stop
+        if req.seed is not None:
+            options["seed"] = req.seed
+        if req.presence_penalty is not None:
+            options["presence_penalty"] = req.presence_penalty
+        if req.frequency_penalty is not None:
+            options["frequency_penalty"] = req.frequency_penalty
         if options:
             payload["options"] = options
+        if req.json_mode:
+            payload["format"] = "json"
 
         started = time.perf_counter()
         first_token_at: float | None = None

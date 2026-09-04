@@ -144,8 +144,20 @@ class LmStudioBackend(Backend):
         }
         if req.temperature is not None:
             payload["temperature"] = req.temperature
+        if req.top_p is not None:
+            payload["top_p"] = req.top_p
         if req.max_tokens is not None:
             payload["max_tokens"] = req.max_tokens
+        if req.stop:
+            payload["stop"] = req.stop
+        if req.seed is not None:
+            payload["seed"] = req.seed
+        if req.presence_penalty is not None:
+            payload["presence_penalty"] = req.presence_penalty
+        if req.frequency_penalty is not None:
+            payload["frequency_penalty"] = req.frequency_penalty
+        if req.json_mode:
+            payload["response_format"] = {"type": "json_object"}
 
         started = time.perf_counter()
         first_token_at: float | None = None

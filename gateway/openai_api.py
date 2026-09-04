@@ -89,14 +89,75 @@ class ChatCompletionRequest(_Lenient):
     model: str
     messages: list[OpenAIMessage]
     stream: bool = False
+
     temperature: Optional[float] = None
+    top_p: Optional[float] = None
     max_tokens: Optional[int] = None
     #: Neuerer Name fuer dasselbe; manche Clients schicken nur noch den.
     max_completion_tokens: Optional[int] = None
+    stop: Union[str, list[str], None] = None
+    seed: Optional[int] = None
+    presence_penalty: Optional[float] = None
+    frequency_penalty: Optional[float] = None
+    response_format: Optional[dict[str, Any]] = None
     stream_options: Optional[StreamOptions] = None
+
+    #: Wird nicht erfuellt, sondern abgelehnt - siehe `pruefe_machbarkeit`.
+    n: Optional[int] = None
+    tools: Optional[list[dict[str, Any]]] = None
+    tool_choice: Union[str, dict[str, Any], None] = None
+    logprobs: Optional[bool] = None
 
     def limit(self) -> Optional[int]:
         return self.max_completion_tokens or self.max_tokens
+
+    def stop_list(self) -> list[str]:
+        if self.stop is None:
+            return []
+        return [self.stop] if isinstance(self.stop, str) else list(self.stop)
+
+    def json_mode(self) -> bool:
+        return (self.response_format or {}).get("type") in (
+            "json_object",
+            "json_schema",
+        )
+
+    def pruefe_machbarkeit(self) -> None:
+        """Lieber ein klarer Fehler als eine Antwort, die anders zustande kam.
+
+        Ein Agent, der `tools` schickt und eine gewoehnliche Antwort
+        zurueckbekommt, dreht sich im Kreis: er wartet auf Werkzeugaufrufe,
+        die nie kommen, und probiert es neu. Ein 400 mit Begruendung kostet
+        eine Sekunde statt einer Viertelstunde.
+        """
+        if self.tools or self.tool_choice not in (None, "none"):
+            raise _error(
+                400,
+                "Tool-Calling wird von diesem Gateway noch nicht unterstuetzt. "
+                "Siehe AGENTS.md; Werkzeuge im Antworttext (etwa Diff-Formate) "
+                "funktionieren.",
+                "unsupported_parameter",
+            )
+        if self.n is not None and self.n != 1:
+            raise _error(
+                400,
+                f"n={self.n} wird nicht unterstuetzt; es kommt immer genau eine "
+                "Antwort zurueck.",
+                "unsupported_parameter",
+            )
+        if self.logprobs:
+            raise _error(
+                400,
+                "logprobs werden von den Backends nicht durchgereicht.",
+                "unsupported_parameter",
+            )
+        if (self.response_format or {}).get("type") == "json_schema":
+            raise _error(
+                400,
+                "response_format 'json_schema' wird nicht unterstuetzt; "
+                "'json_object' geht.",
+                "unsupported_parameter",
+            )
 
 
 class ModelCard(BaseModel):
@@ -242,6 +303,8 @@ async def chat_completions(
     request: Request,
     _: None = Depends(require_agent_token),
 ):
+    body.pruefe_machbarkeit()
+
     backends: dict[BackendId, Backend] = request.app.state.backends
     backend_id, model = await resolve(body.model, backends)
     adapter = backends[backend_id]
@@ -251,7 +314,13 @@ async def chat_completions(
         model=model,
         messages=to_internal(body.messages),
         temperature=body.temperature,
+        top_p=body.top_p,
         max_tokens=body.limit(),
+        stop=body.stop_list(),
+        seed=body.seed,
+        presence_penalty=body.presence_penalty,
+        frequency_penalty=body.frequency_penalty,
+        json_mode=body.json_mode(),
     )
 
     if body.stream:

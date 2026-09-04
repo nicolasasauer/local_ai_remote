@@ -300,3 +300,100 @@ class TestLmStudioModellverwechslung:
             )
 
         assert not [e for e in events if isinstance(e, Status) and e.note]
+
+
+class TestParameterErreichenDasBackend:
+    """Was der Aufrufer setzt, muss im Payload landen.
+
+    Ein still verworfener Parameter erzeugt eine Antwort, die anders zustande
+    kam als angefordert - und niemand sieht warum.
+    """
+
+    def _ollama(self, gesendet: list):
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/api/show":
+                return httpx.Response(200, json={"capabilities": ["completion"]})
+            gesendet.append(json.loads(request.content))
+            return httpx.Response(
+                200, content=ndjson({"message": {"content": "ok"}, "done": True})
+            )
+
+        return httpx.MockTransport(handler)
+
+    def _lmstudio(self, gesendet: list):
+        def handler(request: httpx.Request) -> httpx.Response:
+            gesendet.append(json.loads(request.content))
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=TroepfelStream(
+                    [{"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]}]
+                ),
+            )
+
+        return httpx.MockTransport(handler)
+
+    @pytest.mark.asyncio
+    async def test_ollama_bekommt_options_und_format(self):
+        gesendet: list = []
+        async with httpx.AsyncClient(transport=self._ollama(gesendet)) as http:
+            await collect(
+                OllamaBackend("http://ollama", http),
+                request_of(
+                    temperature=0.3,
+                    top_p=0.9,
+                    max_tokens=128,
+                    stop=["ENDE"],
+                    seed=42,
+                    presence_penalty=0.1,
+                    frequency_penalty=0.2,
+                    json_mode=True,
+                ),
+            )
+
+        payload = gesendet[0]
+        assert payload["options"]["temperature"] == 0.3
+        assert payload["options"]["top_p"] == 0.9
+        assert payload["options"]["num_predict"] == 128
+        assert payload["options"]["stop"] == ["ENDE"]
+        assert payload["options"]["seed"] == 42
+        assert payload["options"]["presence_penalty"] == 0.1
+        assert payload["options"]["frequency_penalty"] == 0.2
+        assert payload["format"] == "json"
+
+    @pytest.mark.asyncio
+    async def test_lmstudio_bekommt_die_openai_namen(self):
+        gesendet: list = []
+        async with httpx.AsyncClient(transport=self._lmstudio(gesendet)) as http:
+            await collect(
+                LmStudioBackend("http://lmstudio", http),
+                request_of(
+                    temperature=0.3,
+                    top_p=0.9,
+                    max_tokens=128,
+                    stop=["ENDE"],
+                    seed=42,
+                    json_mode=True,
+                ),
+            )
+
+        payload = gesendet[0]
+        assert payload["temperature"] == 0.3
+        assert payload["top_p"] == 0.9
+        assert payload["max_tokens"] == 128
+        assert payload["stop"] == ["ENDE"]
+        assert payload["seed"] == 42
+        assert payload["response_format"] == {"type": "json_object"}
+
+    @pytest.mark.asyncio
+    async def test_nicht_gesetzte_parameter_tauchen_nicht_auf(self):
+        # Sonst ueberschreibt das Gateway die Voreinstellungen des Backends
+        # mit Werten, die niemand angefordert hat.
+        gesendet: list = []
+        async with httpx.AsyncClient(transport=self._lmstudio(gesendet)) as http:
+            await collect(LmStudioBackend("http://lmstudio", http), request_of())
+
+        payload = gesendet[0]
+        for feld in ("temperature", "top_p", "max_tokens", "stop", "seed",
+                     "response_format", "presence_penalty", "frequency_penalty"):
+            assert feld not in payload, f"{feld} haette nicht gesetzt werden duerfen"

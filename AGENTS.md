@@ -45,8 +45,29 @@ Fehler, der die Kandidaten nennt.
 | `usage` | echte Tokenzahlen beider Backends, im Stream auf Anforderung |
 | Bilder | nur als `data:`-URL |
 
-Nicht enthalten: Tool-Calling (siehe unten), Embeddings, Completions im alten
-Format.
+### Parameter
+
+Durchgereicht an beide Backends: `temperature`, `top_p`, `max_tokens` (auch
+als `max_completion_tokens`), `stop`, `seed`, `presence_penalty`,
+`frequency_penalty`, `response_format: {"type": "json_object"}`.
+
+**Abgelehnt statt still ignoriert** — mit `400` und Begründung:
+
+| Parameter | Warum |
+|---|---|
+| `tools`, `tool_choice` | noch nicht unterstützt; ein Agent würde sonst auf Werkzeugaufrufe warten, die nie kommen, und es endlos neu versuchen |
+| `n` > 1 | es kommt immer genau eine Antwort |
+| `logprobs` | die Backends reichen sie nicht durch |
+| `response_format: json_schema` | nur `json_object` geht |
+
+Der Grundsatz ist derselbe wie überall im Projekt: keine Antwort, die anders
+zustande kam als angefordert, ohne dass es jemand sieht. Ein 400 kostet eine
+Sekunde, ein stiller Unterschied eine Viertelstunde Fehlersuche.
+
+Unbekannte Felder (`user`, `logit_bias`, …) werden verworfen, ohne die
+Anfrage zu kippen — sonst wäre die Oberfläche mit realen Clients unbrauchbar.
+
+Nicht enthalten: Embeddings, Completions im alten Format.
 
 ## Sicherheitsmodell
 
@@ -78,6 +99,10 @@ eine fremde Datei hineingeschrieben hat.
 **Obergrenze für den Anfragekörper** (`GATEWAY_MAX_REQUEST_BYTES`, 32 MB).
 Agenten schicken ganze Projektdateien; der Desktop ist derselbe Rechner, auf
 dem das Modell läuft.
+
+**Fehler im OpenAI-Format.** `{"error": {"message": …}}` auf oberster Ebene,
+nicht in FastAPIs `detail` verpackt — sonst finden Clients die Meldung nicht
+und zeigen „unknown error".
 
 **Keine CORS-Header.** Browserseitige Werkzeuge können die Oberfläche nicht
 ansprechen. Das ist Absicht: eine beliebige Webseite soll nicht im Namen des

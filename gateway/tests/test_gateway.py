@@ -286,9 +286,18 @@ class TestOpenAiAuth:
         assert agent_client.get("/openai/v1/models", headers=agent_auth()).status_code == 200
 
     def test_fehler_kommt_im_openai_format(self, agent_client):
+        # OpenAI-Clients lesen `error.message` auf oberster Ebene. Unter
+        # `detail` verpackt finden sie es nicht und melden "unknown error".
         r = agent_client.get("/openai/v1/models", headers={"Authorization": "Bearer x"})
         assert r.status_code == 401
-        assert r.json()["detail"]["error"]["message"]
+        assert "detail" not in r.json()
+        assert r.json()["error"]["message"]
+        assert r.json()["error"]["type"]
+
+    def test_app_api_behaelt_ihre_fehlerform(self, client):
+        # Die App liest `detail` - diese Form darf sich nicht mitaendern.
+        r = client.get("/v1/health", headers={"Authorization": "Bearer falsch"})
+        assert r.json()["detail"] == "Ungueltiger Token"
 
 
 class TestOpenAiModels:
@@ -360,13 +369,13 @@ class TestOpenAiChat:
     def test_unbekanntes_modell_gibt_404_mit_hinweis(self, agent_client):
         r = _completion(agent_client, model="gibtsnicht")
         assert r.status_code == 404
-        assert "Praefix" in r.json()["detail"]["error"]["message"]
+        assert "Praefix" in r.json()["error"]["message"]
 
     def test_mehrdeutiges_modell_verlangt_praefix(self, agent_client):
         # "m1" gibt es auf beiden Attrappen.
         r = _completion(agent_client, model="m1")
         assert r.status_code == 400
-        assert "mehreren Backends" in r.json()["detail"]["error"]["message"]
+        assert "mehreren Backends" in r.json()["error"]["message"]
 
     def test_unbekannte_felder_kippen_die_anfrage_nicht(self, agent_client):
         # Clients schicken presence_penalty, logit_bias, user, seed ...
@@ -419,3 +428,62 @@ class TestOpenAiChat:
             if l.startswith("data:") and l[5:].strip() != "[DONE]"
         ]
         assert chunks[-1]["model"] == "ollama/ein-ganz-anderes"
+
+
+class TestOpenAiParameter:
+    """Was gesetzt wird, muss ankommen; was nicht geht, muss auffallen."""
+
+    def test_generierungsparameter_kommen_beim_backend_an(self, agent_client, backends):
+        _completion(
+            agent_client,
+            temperature=0.3,
+            top_p=0.9,
+            max_tokens=128,
+            stop=["ENDE"],
+            seed=42,
+            presence_penalty=0.1,
+            frequency_penalty=0.2,
+            response_format={"type": "json_object"},
+        )
+        req = backends[BackendId.ollama].seen[-1]
+
+        assert req.temperature == 0.3
+        assert req.top_p == 0.9
+        assert req.max_tokens == 128
+        assert req.stop == ["ENDE"]
+        assert req.seed == 42
+        assert req.presence_penalty == 0.1
+        assert req.frequency_penalty == 0.2
+        assert req.json_mode is True
+
+    def test_stop_als_einzelner_string(self, agent_client, backends):
+        _completion(agent_client, stop="ENDE")
+        assert backends[BackendId.ollama].seen[-1].stop == ["ENDE"]
+
+    def test_tools_werden_klar_abgelehnt(self, agent_client):
+        # Sonst wartet ein Agent auf Werkzeugaufrufe, die nie kommen.
+        r = _completion(
+            agent_client,
+            tools=[{"type": "function", "function": {"name": "lies_datei"}}],
+        )
+        assert r.status_code == 400
+        assert "Tool-Calling" in r.json()["error"]["message"]
+
+    def test_n_groesser_eins_wird_abgelehnt(self, agent_client):
+        r = _completion(agent_client, n=3)
+        assert r.status_code == 400
+        assert "n=3" in r.json()["error"]["message"]
+
+    def test_n_gleich_eins_geht_durch(self, agent_client):
+        assert _completion(agent_client, n=1).status_code == 200
+
+    def test_logprobs_werden_abgelehnt(self, agent_client):
+        assert _completion(agent_client, logprobs=True).status_code == 400
+
+    def test_json_schema_wird_abgelehnt_json_object_nicht(self, agent_client):
+        schema = _completion(
+            agent_client, response_format={"type": "json_schema", "json_schema": {}}
+        )
+        assert schema.status_code == 400
+        objekt = _completion(agent_client, response_format={"type": "json_object"})
+        assert objekt.status_code == 200
