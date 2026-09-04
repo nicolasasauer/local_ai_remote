@@ -1,0 +1,78 @@
+"""Konfiguration des Gateways, komplett über Umgebungsvariablen."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+#: Neben der Umgebung wird eine .env im Gateway-Ordner gelesen. Ohne das
+#: bliebe GATEWAY_TOKEN leer, obwohl die Datei angelegt wurde - und ein leerer
+#: Token schaltet die Auth still ab.
+_ENV_FILE = Path(__file__).resolve().parent / ".env"
+
+
+def _load_env_file(path: Path = _ENV_FILE) -> None:
+    """Minimaler .env-Leser. Echte Umgebungsvariablen haben Vorrang, damit
+    ein Start mit ``GATEWAY_TOKEN=… python -m gateway.main`` die Datei
+    übersteuert statt umgekehrt."""
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+class ConfigError(RuntimeError):
+    """Startfehler, der nicht still übergangen werden darf."""
+
+
+@dataclass(frozen=True)
+class Config:
+    token: str
+    ollama_url: str
+    lmstudio_url: str
+    bind_host: str
+    bind_port: int
+    request_timeout: float
+    telemetry_interval: float
+
+    @classmethod
+    def from_env(cls) -> "Config":
+        _load_env_file()
+        return cls(
+            token=os.getenv("GATEWAY_TOKEN", "").strip(),
+            ollama_url=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/"),
+            lmstudio_url=os.getenv("LMSTUDIO_URL", "http://127.0.0.1:1234").rstrip("/"),
+            # Standardmaessig nur lokal: tailscale serve reicht die Verbindung
+            # von aussen weiter, das Gateway selbst braucht keine offene Bindung.
+            bind_host=os.getenv("GATEWAY_HOST", "127.0.0.1"),
+            bind_port=int(os.getenv("GATEWAY_PORT", "8765")),
+            request_timeout=float(os.getenv("GATEWAY_TIMEOUT", "600")),
+            telemetry_interval=float(os.getenv("TELEMETRY_INTERVAL", "1.0")),
+        )
+
+    def check(self) -> None:
+        """Läuft beim Start, nicht beim Import - ein Testlauf ohne Token soll
+        möglich bleiben, ein Server ohne Token nicht."""
+        if not self.token:
+            raise ConfigError(
+                "GATEWAY_TOKEN ist leer - ohne Token wäre jede Anfrage im Tailnet "
+                f"erlaubt. Token in {_ENV_FILE} setzen (Vorlage: .env.example)."
+            )
+        if len(self.token) < 16:
+            raise ConfigError(
+                f"GATEWAY_TOKEN ist mit {len(self.token)} Zeichen zu kurz; "
+                "mindestens 16 verwenden."
+            )
+
+
+CONFIG = Config.from_env()

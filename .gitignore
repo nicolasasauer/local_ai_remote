@@ -1,0 +1,26 @@
+# Flutter / Dart
+app/.dart_tool/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/build/
+app/pubspec.lock
+app/android/
+app/ios/
+app/windows/
+app/linux/
+app/macos/
+app/web/
+app/.idea/
+*.iml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Lokales
+.env
+*.db
+.DS_Store
