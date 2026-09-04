@@ -35,6 +35,7 @@ from .base import (
     Failure,
     NotSupported,
     Reasoning,
+    Status,
 )
 
 _NO_DISK_SIZE = "LM Studio liefert keine Dateigroesse ueber /api/v0/models"
@@ -136,6 +137,10 @@ class LmStudioBackend(Backend):
             "model": req.model,
             "messages": [self._message(m) for m in req.messages],
             "stream": True,
+            # Ohne das schickt LM Studio im Stream ueberhaupt kein `usage`.
+            # Die Tokenzahlen blieben dann dauerhaft unbekannt - und damit
+            # auch die Kalibrierung der Kontextanzeige in der App.
+            "stream_options": {"include_usage": True},
         }
         if req.temperature is not None:
             payload["temperature"] = req.temperature
@@ -147,6 +152,8 @@ class LmStudioBackend(Backend):
         stats: dict[str, Any] = {}
         usage: dict[str, Any] = {}
         finish_reason: str | None = None
+        served: str | None = None
+        abweichung_gemeldet = False
 
         try:
             # /api/v0 statt /v1: identisches Format, liefert aber zusaetzlich
@@ -175,6 +182,18 @@ class LmStudioBackend(Backend):
                     stats = chunk.get("stats") or stats
                     usage = chunk.get("usage") or usage
 
+                    served = chunk.get("model") or served
+                    if served and served != req.model and not abweichung_gemeldet:
+                        abweichung_gemeldet = True
+                        yield Status(
+                            "generating",
+                            note=(
+                                f"LM Studio antwortet mit '{served}', angefragt "
+                                f"war '{req.model}' - dort ist ein anderes "
+                                "Modell geladen"
+                            ),
+                        )
+
                     for choice in chunk.get("choices", []):
                         delta = choice.get("delta") or {}
 
@@ -200,7 +219,9 @@ class LmStudioBackend(Backend):
                             finish_reason = choice["finish_reason"]
 
             yield Done(
-                self._metrics(stats, usage, finish_reason, started, first_token_at)
+                self._metrics(
+                    stats, usage, finish_reason, started, first_token_at, served
+                )
             )
         except httpx.HTTPError as exc:
             yield Failure(f"Verbindung zu LM Studio abgebrochen: {exc}")
@@ -226,6 +247,7 @@ class LmStudioBackend(Backend):
         finish_reason: str | None,
         started: float,
         first_token_at: float | None,
+        served: str | None = None,
     ) -> ChatMetrics:
         ttft_s = stats.get("time_to_first_token")
         ttft = (
@@ -237,8 +259,39 @@ class LmStudioBackend(Backend):
                 else None
             )
         )
+        total_ms = round((time.perf_counter() - started) * 1000, 1)
+
+        # `stats` kommt bei LM Studio nur im nicht-streamenden Fall. Das
+        # Tempo laesst sich aber aus gemessenen Groessen ableiten: erzeugte
+        # Tokens geteilt durch die Zeit nach dem ersten Token. Das ist eine
+        # eigene Messung, keine Schaetzung - die Herkunft steht in `note`.
+        tps = stats.get("tokens_per_second")
+        tps_note = "stats fehlen im Abschluss-Chunk"
+        if not isinstance(tps, (int, float)):
+            erzeugt = usage.get("completion_tokens")
+            generierzeit_ms = total_ms - (ttft or 0)
+            if isinstance(erzeugt, int) and erzeugt > 1 and generierzeit_ms > 50:
+                return ChatMetrics(
+                    total_ms=Fact.of(total_ms),
+                    load_ms=Fact.unsupported_because(
+                        "LM Studio trennt Ladezeit nicht von der Generierung"
+                    ),
+                    time_to_first_token_ms=Fact.maybe(ttft, "kein Token empfangen"),
+                    prompt_tokens=Fact.maybe(
+                        usage.get("prompt_tokens"), "usage fehlt im Stream"
+                    ),
+                    completion_tokens=Fact.of(erzeugt),
+                    tokens_per_second=Fact(
+                        value=round(erzeugt / (generierzeit_ms / 1000), 2),
+                        note="vom Gateway aus Tokenzahl und Dauer berechnet; "
+                        "LM Studio liefert im Stream keine eigene Angabe",
+                    ),
+                    stop_reason=Fact.maybe(finish_reason, "finish_reason fehlt"),
+                    served_model=Fact.maybe(served, "Backend nennt kein Modell"),
+                )
+
         return ChatMetrics(
-            total_ms=Fact.of(round((time.perf_counter() - started) * 1000, 1)),
+            total_ms=Fact.of(total_ms),
             load_ms=Fact.unsupported_because(
                 "LM Studio trennt Ladezeit nicht von der Generierung"
             ),
@@ -249,10 +302,9 @@ class LmStudioBackend(Backend):
             completion_tokens=Fact.maybe(
                 usage.get("completion_tokens"), "usage fehlt im Stream"
             ),
-            tokens_per_second=Fact.maybe(
-                stats.get("tokens_per_second"), "stats fehlen im Abschluss-Chunk"
-            ),
+            tokens_per_second=Fact.maybe(tps, tps_note),
             stop_reason=Fact.maybe(finish_reason, "finish_reason fehlt"),
+            served_model=Fact.maybe(served, "Backend nennt kein Modell"),
         )
 
     async def set_keep_alive(self, model: str, *, pin: bool) -> None:

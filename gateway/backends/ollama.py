@@ -351,6 +351,7 @@ class OllamaBackend(Backend):
             stop_reason=Fact.maybe(
                 chunk.get("done_reason"), "done_reason fehlt (aeltere Ollama-Version)"
             ),
+            served_model=Fact.maybe(chunk.get("model"), "Backend nennt kein Modell"),
         )
 
     async def set_keep_alive(self, model: str, *, pin: bool) -> None:

@@ -166,3 +166,9 @@ class ChatMetrics(BaseModel):
     completion_tokens: Fact[int] = Field(default_factory=Fact)
     tokens_per_second: Fact[float] = Field(default_factory=Fact)
     stop_reason: Fact[str] = Field(default_factory=Fact)
+
+    #: Das Modell, das laut Backend geantwortet hat. LM Studio beantwortet
+    #: jeden Namen mit dem gerade geladenen Modell - auch einen erfundenen,
+    #: und mit Status 200. Ohne diese Angabe waere nicht erkennbar, dass eine
+    #: Antwort von einem anderen Modell stammt als angefragt.
+    served_model: Fact[str] = Field(default_factory=Fact)
