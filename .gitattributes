@@ -1,0 +1,7 @@
+# Im Repo immer LF, im Arbeitsverzeichnis die Konvention des Systems.
+# Ohne das meldet Git unter Windows bei jeder Datei eine Zeilenendenumstellung.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
