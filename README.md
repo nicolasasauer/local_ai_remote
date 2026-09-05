@@ -64,11 +64,11 @@ In den Einstellungen dann die `tailscale serve`-URL und den Token eintragen.
 
 ## Agenten-Werkzeuge
 
-Unter `/openai/v1` spricht das Gateway zusätzlich das
-Chat-Completions-Format, inklusive Werkzeugaufrufen. Damit lassen sich
-Agenten-Werkzeuge über das Tailnet auf die lokalen Modelle richten. Die
-Oberfläche ist standardmäßig aus und braucht ein **eigenes** Token — Details
-und Sicherheitsmodell in [AGENTS.md](AGENTS.md).
+Unter `/openai/v1` spricht das Gateway zusätzlich Chat-Completions **und** die
+Responses-API, jeweils mit Werkzeugaufrufen. Damit laufen Agenten-Werkzeuge
+über das Tailnet gegen die lokalen Modelle — die Codex CLI ist gegen beide
+Backends geprüft. Die Oberfläche ist standardmäßig aus und braucht ein
+**eigenes** Token; Details und Sicherheitsmodell in [AGENTS.md](AGENTS.md).
 
 ## Leitgedanken
 
