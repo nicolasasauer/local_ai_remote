@@ -24,6 +24,7 @@ from ..schema import (
     ModelEntry,
     ModelKind,
     ModelState,
+    ToolCall,
 )
 from .base import (
     Backend,
@@ -34,6 +35,7 @@ from .base import (
     Failure,
     Reasoning,
     Status,
+    ToolCalls,
 )
 
 _NO_CAPS_NOTE = (
@@ -54,6 +56,47 @@ def _parse_expiry(raw: str | None) -> datetime | None:
     if parsed.year > datetime.now().year + 5:
         return None
     return parsed
+
+
+def _als_objekt(arguments: str) -> Any:
+    """Argumente zurueck in ein Objekt, wie Ollama sie erwartet.
+
+    Laesst sich der String nicht lesen, geht er unveraendert weiter: eine
+    Reparatur waere geraten, und das Modell hat ihn so erzeugt.
+    """
+    try:
+        return json.loads(arguments)
+    except (json.JSONDecodeError, TypeError):
+        return arguments
+
+
+def _tool_calls(message: dict[str, Any]) -> list[ToolCall]:
+    """Werkzeugaufrufe aus einem Ollama-Chunk.
+
+    Ollama liefert sie vollstaendig und mit eigener Id; die Argumente kommen
+    als Objekt und werden fuer die einheitliche Form serialisiert.
+    """
+    roh = message.get("tool_calls")
+    if not isinstance(roh, list):
+        return []
+
+    out: list[ToolCall] = []
+    for i, eintrag in enumerate(roh):
+        funktion = eintrag.get("function") or {}
+        name = funktion.get("name")
+        if not name:
+            continue
+        argumente = funktion.get("arguments")
+        if not isinstance(argumente, str):
+            argumente = json.dumps(argumente or {}, ensure_ascii=False)
+        out.append(
+            ToolCall(
+                id=str(eintrag.get("id") or f"call_{i}"),
+                name=str(name),
+                arguments=argumente,
+            )
+        )
+    return out
 
 
 class OllamaBackend(Backend):
@@ -245,6 +288,11 @@ class OllamaBackend(Backend):
             "messages": [self._message(m) for m in req.messages],
             "stream": True,
         }
+        if req.tools:
+            payload["tools"] = req.tools
+        if req.tool_choice is not None:
+            payload["tool_choice"] = req.tool_choice
+
         # Ohne "think" liefert Ollama bei Reasoning-Modellen weder thinking
         # noch content - die Antwort bliebe leer. None heisst: anhand der
         # Faehigkeiten des Modells entscheiden.
@@ -279,6 +327,7 @@ class OllamaBackend(Backend):
 
         started = time.perf_counter()
         first_token_at: float | None = None
+        hatte_aufrufe = False
 
         try:
             async with self.http.stream(
@@ -319,8 +368,19 @@ class OllamaBackend(Backend):
                             first_token_at = time.perf_counter()
                         yield Delta(text)
 
+                    aufrufe = _tool_calls(message)
+                    if aufrufe:
+                        if first_token_at is None:
+                            first_token_at = time.perf_counter()
+                        hatte_aufrufe = True
+                        yield ToolCalls(aufrufe)
+
                     if chunk.get("done"):
-                        yield Done(self._metrics(chunk, started, first_token_at))
+                        yield Done(
+                            self._metrics(
+                                chunk, started, first_token_at, hatte_aufrufe
+                            )
+                        )
                         return
         except httpx.HTTPError as exc:
             yield Failure(f"Verbindung zu Ollama abgebrochen: {exc}")
@@ -330,11 +390,32 @@ class OllamaBackend(Backend):
         out: dict[str, Any] = {"role": msg.role, "content": msg.content}
         if msg.images:
             out["images"] = msg.images
+        if msg.tool_calls:
+            # Ollama erwartet die Argumente als Objekt, nicht als String.
+            out["tool_calls"] = [
+                {
+                    "id": call.id,
+                    "function": {
+                        "name": call.name,
+                        "arguments": _als_objekt(call.arguments),
+                    },
+                }
+                for call in msg.tool_calls
+            ]
+        if msg.role == "tool":
+            # Ollama ordnet Ergebnisse ueber den Namen zu, nicht ueber die Id.
+            if msg.tool_name:
+                out["tool_name"] = msg.tool_name
+            if msg.tool_call_id:
+                out["tool_call_id"] = msg.tool_call_id
         return out
 
     @staticmethod
     def _metrics(
-        chunk: dict[str, Any], started: float, first_token_at: float | None
+        chunk: dict[str, Any],
+        started: float,
+        first_token_at: float | None,
+        hatte_aufrufe: bool = False,
     ) -> ChatMetrics:
         eval_count = chunk.get("eval_count")
         eval_ns = chunk.get("eval_duration")
@@ -363,8 +444,17 @@ class OllamaBackend(Backend):
             tokens_per_second=Fact.maybe(
                 tps, "eval_count oder eval_duration fehlt"
             ),
-            stop_reason=Fact.maybe(
-                chunk.get("done_reason"), "done_reason fehlt (aeltere Ollama-Version)"
+            # Ollama meldet auch bei Werkzeugaufrufen "stop". OpenAI-Clients
+            # unterscheiden aber danach, ob sie Werkzeuge ausfuehren muessen -
+            # also wird der Grund hier auf das gehoben, was tatsaechlich
+            # passiert ist.
+            stop_reason=(
+                Fact.of("tool_calls")
+                if hatte_aufrufe
+                else Fact.maybe(
+                    chunk.get("done_reason"),
+                    "done_reason fehlt (aeltere Ollama-Version)",
+                )
             ),
             served_model=Fact.maybe(chunk.get("model"), "Backend nennt kein Modell"),
         )

@@ -24,6 +24,7 @@ ersetzt, die App-Tests nutzen eine SQLite-Datenbank im Arbeitsspeicher.
 | Datei | Prüft |
 |---|---|
 | `gateway/tests/test_gateway.py` | Auth (401 ohne/mit falschem Token, WebSocket), `.env`-Laden und Fail-Fast bei leerem oder kurzem Token, `reasoning` als eigener Event-Typ, `think`-Durchreichung, ausgefallenes Backend blockiert die Modellliste nicht, `Fact`-Lücken tragen eine Begründung |
+| `gateway/tests/test_tools.py` | Werkzeugaufrufe auf Adapter-Ebene: Ollamas Objekt-Argumente werden zum JSON-String, LM Studios Fragmente werden zusammengesetzt, `stop` wird zu `tool_calls`, und der Verlauf geht in der jeweils erwarteten Form zurück |
 | `gateway/tests/test_backends.py` | was die Adapter tatsächlich senden und wie sie die Antwort lesen — `think` bei Ollama, `stream_options` bei LM Studio, Denkschritte getrennt vom Antworttext, Modellverwechslung |
 | `app/test/gateway_client_test.dart` | SSE-Zerlegung, Denkschritte als eigener Ereignistyp, Fehler mitten im Stream, und dass ein Abbruch die Verbindung wirklich schliesst |
 | `app/test/chat_store_test.dart` | Umbenennen und Modellwechsel lassen den Verlauf stehen, Löschen räumt Nachrichten mit ab, `recoverInterrupted` markiert hängengebliebene Antworten, Denkschritte werden getrennt vom Antworttext persistiert |
@@ -68,6 +69,22 @@ dort `usesCleartextTraffic`. Im Release-Build braucht es die HTTPS-Adresse aus
 | 7 | Erste Frage in einem frischen Chat | Chat wird nach der Frage benannt **und die Frage bleibt sichtbar** |
 | 8 | Modell mitten im Chat wechseln | Verlauf bleibt vollständig, Kontext wird neu geschätzt (`~` kehrt zurück) |
 | 9 | Falscher Token in den Einstellungen | `401` mit lesbarer Meldung, keine leere Liste ohne Erklärung |
+
+### Agentenschleife
+
+Nicht automatisiert, weil sie ein echtes Modell mit `tools`-Fähigkeit braucht.
+`gateway/tests/agentenschleife.py` fährt Frage → Werkzeugaufruf → lokale
+Ausführung → Ergebnis → Antwort und meldet, ob die Schleife durchläuft. Das
+Werkzeug wird im Skript ausgeführt, nicht im Gateway:
+
+```bash
+python gateway/tests/agentenschleife.py "ollama/<modell>"
+python gateway/tests/agentenschleife.py "lmstudio/<modell>" --stream
+```
+
+Erwartung im ersten Zug: `finish_reason=tool_calls` und ein vollständiger
+Aufruf mit lesbaren Argumenten. Im zweiten Zug eine Antwort, die das Ergebnis
+tatsächlich verwendet.
 
 Szenario 2, 7 und 8 haben je einen echten Fehler aufgedeckt — sie sind die
 wichtigsten der Liste.

@@ -25,6 +25,7 @@ from ..schema import (
     ModelEntry,
     ModelKind,
     ModelState,
+    ToolCall,
 )
 from .base import (
     Backend,
@@ -36,11 +37,33 @@ from .base import (
     NotSupported,
     Reasoning,
     Status,
+    ToolCalls,
 )
 
 _NO_DISK_SIZE = "LM Studio liefert keine Dateigroesse ueber /api/v0/models"
 _NO_VRAM = "LM Studio weist geladenen Modellen keinen VRAM-Wert zu"
 _NO_TTL = "LM Studio gibt den Auto-Unload-Timer nicht ueber die API heraus"
+
+
+def _sammle(aufrufe: dict[int, dict[str, str]], fragment: dict[str, Any]) -> None:
+    """Ein Fragment in den Sammelbehaelter einsortieren.
+
+    Das erste Fragment eines Aufrufs traegt Id und Name, die folgenden nur
+    noch Stuecke des Argument-Strings. Ohne Zusammensetzen bekaeme der Client
+    abgeschnittenes JSON, das er nicht ausfuehren kann.
+    """
+    index = fragment.get("index", 0)
+    eintrag = aufrufe.setdefault(index, {"id": "", "name": "", "arguments": ""})
+
+    if fragment.get("id"):
+        eintrag["id"] = str(fragment["id"])
+    funktion = fragment.get("function") or {}
+    if funktion.get("name"):
+        eintrag["name"] = str(funktion["name"])
+    if funktion.get("arguments"):
+        eintrag["arguments"] += str(funktion["arguments"])
+    if not eintrag["id"]:
+        eintrag["id"] = f"call_{index}"
 
 
 class LmStudioBackend(Backend):
@@ -158,6 +181,10 @@ class LmStudioBackend(Backend):
             payload["frequency_penalty"] = req.frequency_penalty
         if req.json_mode:
             payload["response_format"] = {"type": "json_object"}
+        if req.tools:
+            payload["tools"] = req.tools
+        if req.tool_choice is not None:
+            payload["tool_choice"] = req.tool_choice
 
         started = time.perf_counter()
         first_token_at: float | None = None
@@ -166,6 +193,9 @@ class LmStudioBackend(Backend):
         finish_reason: str | None = None
         served: str | None = None
         abweichung_gemeldet = False
+        # Werkzeugaufrufe kommen stueckweise: erst Id und Name, dann die
+        # Argumente ueber mehrere Chunks. Gesammelt wird nach `index`.
+        aufrufe: dict[int, dict[str, str]] = {}
 
         try:
             # /api/v0 statt /v1: identisches Format, liefert aber zusaetzlich
@@ -227,8 +257,28 @@ class LmStudioBackend(Backend):
                             if first_token_at is None:
                                 first_token_at = time.perf_counter()
                             yield Delta(text)
+
+                        for fragment in delta.get("tool_calls") or []:
+                            if first_token_at is None:
+                                first_token_at = time.perf_counter()
+                            _sammle(aufrufe, fragment)
+
                         if choice.get("finish_reason"):
                             finish_reason = choice["finish_reason"]
+
+            # Erst wenn der Strom durch ist, sind die Argumente vollstaendig.
+            if aufrufe:
+                yield ToolCalls(
+                    [
+                        ToolCall(
+                            id=eintrag["id"],
+                            name=eintrag["name"],
+                            arguments=eintrag["arguments"],
+                        )
+                        for _, eintrag in sorted(aufrufe.items())
+                        if eintrag["name"]
+                    ]
+                )
 
             yield Done(
                 self._metrics(
@@ -240,6 +290,27 @@ class LmStudioBackend(Backend):
 
     @staticmethod
     def _message(msg) -> dict[str, Any]:
+        if msg.tool_calls:
+            return {
+                "role": msg.role,
+                "content": msg.content,
+                "tool_calls": [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": call.name,
+                            "arguments": call.arguments,
+                        },
+                    }
+                    for call in msg.tool_calls
+                ],
+            }
+        if msg.role == "tool":
+            out: dict[str, Any] = {"role": "tool", "content": msg.content}
+            if msg.tool_call_id:
+                out["tool_call_id"] = msg.tool_call_id
+            return out
         if not msg.images:
             return {"role": msg.role, "content": msg.content}
         parts: list[dict[str, Any]] = [{"type": "text", "text": msg.content}]

@@ -24,9 +24,17 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from .backends.base import Backend, BackendError, Delta, Done, Failure, Reasoning
+from .backends.base import (
+    Backend,
+    BackendError,
+    Delta,
+    Done,
+    Failure,
+    Reasoning,
+    ToolCalls,
+)
 from .config import CONFIG
-from .schema import BackendId, ChatMessage, ChatRequest, ModelEntry
+from .schema import BackendId, ChatMessage, ChatRequest, ModelEntry, ToolCall
 
 router = APIRouter(prefix="/openai/v1", tags=["openai"])
 
@@ -80,6 +88,11 @@ class OpenAIMessage(_Lenient):
     content: Union[str, list[dict[str, Any]], None] = None
     name: Optional[str] = None
 
+    #: Bei ``role="assistant"``: was das Modell im vorigen Zug aufrufen wollte.
+    tool_calls: Optional[list[dict[str, Any]]] = None
+    #: Bei ``role="tool"``: auf welchen Aufruf sich das Ergebnis bezieht.
+    tool_call_id: Optional[str] = None
+
 
 class StreamOptions(_Lenient):
     include_usage: bool = False
@@ -125,19 +138,9 @@ class ChatCompletionRequest(_Lenient):
     def pruefe_machbarkeit(self) -> None:
         """Lieber ein klarer Fehler als eine Antwort, die anders zustande kam.
 
-        Ein Agent, der `tools` schickt und eine gewoehnliche Antwort
-        zurueckbekommt, dreht sich im Kreis: er wartet auf Werkzeugaufrufe,
-        die nie kommen, und probiert es neu. Ein 400 mit Begruendung kostet
-        eine Sekunde statt einer Viertelstunde.
+        Ein still verworfener Parameter erzeugt ein Ergebnis, das niemand
+        erklaeren kann. Ein 400 mit Begruendung kostet eine Sekunde.
         """
-        if self.tools or self.tool_choice not in (None, "none"):
-            raise _error(
-                400,
-                "Tool-Calling wird von diesem Gateway noch nicht unterstuetzt. "
-                "Siehe AGENTS.md; Werkzeuge im Antworttext (etwa Diff-Formate) "
-                "funktionieren.",
-                "unsupported_parameter",
-            )
         if self.n is not None and self.n != 1:
             raise _error(
                 400,
@@ -256,11 +259,32 @@ def to_internal(messages: list[OpenAIMessage]) -> list[ChatMessage]:
                     if url.startswith("data:"):
                         images.append(url.split(",", 1)[-1])
 
+        # Werkzeugaufrufe und -ergebnisse gehen unveraendert durch. Das
+        # Gateway prueft die Argumente nicht und fuehrt nichts aus - sie sind
+        # Modellausgabe und damit Sache des Clients, der sie ausfuehrt.
+        aufrufe: list[ToolCall] = []
+        for roh in msg.tool_calls or []:
+            funktion = roh.get("function") or {}
+            if not funktion.get("name"):
+                continue
+            aufrufe.append(
+                ToolCall(
+                    id=str(roh.get("id") or f"call_{len(aufrufe)}"),
+                    name=str(funktion["name"]),
+                    arguments=str(funktion.get("arguments") or "{}"),
+                )
+            )
+
         out.append(
             ChatMessage(
                 role=msg.role,
                 content="\n\n".join(p for p in text_parts if p),
                 images=images,
+                tool_calls=aufrufe,
+                tool_call_id=msg.tool_call_id,
+                # Ollama ordnet Ergebnisse ueber den Namen zu. OpenAI schickt
+                # ihn nur in `name` - ohne das findet Ollama den Bezug nicht.
+                tool_name=msg.name if msg.role == "tool" else None,
             )
         )
     return out
@@ -321,6 +345,8 @@ async def chat_completions(
         presence_penalty=body.presence_penalty,
         frequency_penalty=body.frequency_penalty,
         json_mode=body.json_mode(),
+        tools=body.tools or [],
+        tool_choice=body.tool_choice,
     )
 
     if body.stream:
@@ -337,6 +363,7 @@ async def _collect(backend: Backend, req: ChatRequest, label: str) -> JSONRespon
     """Nicht-streamende Variante: sammeln und in einem Stueck ausliefern."""
     content: list[str] = []
     reasoning: list[str] = []
+    aufrufe: list[ToolCall] = []
     usage: dict[str, int] = {}
     finish = "stop"
     served = label
@@ -347,6 +374,8 @@ async def _collect(backend: Backend, req: ChatRequest, label: str) -> JSONRespon
                 content.append(event.text)
             elif isinstance(event, Reasoning):
                 reasoning.append(event.text)
+            elif isinstance(event, ToolCalls):
+                aufrufe.extend(event.calls)
             elif isinstance(event, Done):
                 usage = _usage(event)
                 finish = _finish_reason(event)
@@ -359,6 +388,12 @@ async def _collect(backend: Backend, req: ChatRequest, label: str) -> JSONRespon
     message: dict[str, Any] = {"role": "assistant", "content": "".join(content)}
     if reasoning:
         message["reasoning_content"] = "".join(reasoning)
+    if aufrufe:
+        message["tool_calls"] = [_als_openai(c) for c in aufrufe]
+        # OpenAI-Clients entscheiden hieran, ob sie Werkzeuge ausfuehren.
+        # `content` ist dann ueblicherweise null, nicht der leere String.
+        message["content"] = message["content"] or None
+        finish = "tool_calls"
 
     return JSONResponse(
         {
@@ -397,6 +432,7 @@ async def _stream(
 
     usage: dict[str, int] = {}
     finish = "stop"
+    hatte_aufrufe = False
     try:
         async for event in backend.stream_chat(req):
             if isinstance(event, Delta):
@@ -406,6 +442,19 @@ async def _stream(
                 # das Feld nicht kennt, ignoriert es - und bekommt dann eben
                 # nur die Antwort, nicht den Denkweg im Antworttext.
                 yield chunk({"reasoning_content": event.text})
+            elif isinstance(event, ToolCalls):
+                # Erst hier vollstaendig: bei LM Studio hat der Adapter die
+                # Fragmente zusammengesetzt, bei Ollama kamen sie in einem Zug.
+                # Als ein Delta ausgeliefert, wie Clients es erwarten.
+                hatte_aufrufe = True
+                yield chunk(
+                    {
+                        "tool_calls": [
+                            {"index": i, **_als_openai(c)}
+                            for i, c in enumerate(event.calls)
+                        ]
+                    }
+                )
             elif isinstance(event, Done):
                 usage = _usage(event)
                 finish = _finish_reason(event)
@@ -436,7 +485,7 @@ async def _stream(
         yield "data: [DONE]\n\n"
         return
 
-    yield chunk({}, finish)
+    yield chunk({}, "tool_calls" if hatte_aufrufe else finish)
     if include_usage and usage:
         yield (
             "data: "
@@ -454,6 +503,14 @@ async def _stream(
             + "\n\n"
         )
     yield "data: [DONE]\n\n"
+
+
+def _als_openai(call: ToolCall) -> dict[str, Any]:
+    return {
+        "id": call.id,
+        "type": "function",
+        "function": {"name": call.name, "arguments": call.arguments},
+    }
 
 
 def _served(event: Done, label: str) -> str:

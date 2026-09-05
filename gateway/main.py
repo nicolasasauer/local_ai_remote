@@ -23,6 +23,7 @@ from .backends.base import (
     Failure,
     Reasoning,
     Status,
+    ToolCalls,
 )
 from .backends.lmstudio import LmStudioBackend
 from .backends.ollama import OllamaBackend
@@ -217,6 +218,15 @@ async def chat(req: ChatRequest, _: None = Depends(require_token)) -> StreamingR
                     await queue.put(_sse({"type": "delta", "text": event.text}))
                 elif isinstance(event, Reasoning):
                     await queue.put(_sse({"type": "reasoning", "text": event.text}))
+                elif isinstance(event, ToolCalls):
+                    await queue.put(
+                        _sse(
+                            {
+                                "type": "tool_calls",
+                                "calls": [c.model_dump() for c in event.calls],
+                            }
+                        )
+                    )
                 elif isinstance(event, Status):
                     await queue.put(
                         _sse(

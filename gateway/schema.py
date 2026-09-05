@@ -132,11 +132,35 @@ class TelemetrySample(BaseModel):
     gpu_note: Optional[str] = None
 
 
+class ToolCall(BaseModel):
+    """Ein Werkzeugaufruf, den das Modell anfordert.
+
+    Das Gateway fuehrt ihn **nicht** aus und interpretiert ihn nicht - es
+    kennt weder Namen noch Bedeutung der Werkzeuge. Ausgefuehrt wird auf dem
+    Rechner des Clients, der die Werkzeuge angeboten hat.
+    """
+
+    id: str
+    name: str
+    #: JSON-String, unveraendert wie vom Modell erzeugt. Ollama liefert ein
+    #: Objekt, LM Studio einen String - hier gilt die OpenAI-Form, damit die
+    #: Argumente nicht durch zweimaliges Parsen und Serialisieren laufen.
+    arguments: str
+
+
 class ChatMessage(BaseModel):
     role: str
     content: str
     #: base64-kodierte Bilder, ohne Data-URL-Prefix.
     images: list[str] = Field(default_factory=list)
+
+    #: Bei ``role="assistant"``: die Werkzeuge, die das Modell aufrufen wollte.
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+    #: Bei ``role="tool"``: auf welchen Aufruf sich das Ergebnis bezieht.
+    tool_call_id: Optional[str] = None
+    #: Bei ``role="tool"``: Name des Werkzeugs. Ollama ordnet Ergebnisse ueber
+    #: den Namen zu, nicht ueber die Id.
+    tool_name: Optional[str] = None
 
 
 class ChatRequest(BaseModel):
@@ -153,6 +177,11 @@ class ChatRequest(BaseModel):
     frequency_penalty: Optional[float] = None
     #: Antwort als JSON erzwingen (OpenAI: ``response_format``).
     json_mode: bool = False
+
+    #: Werkzeuge, die der Client anbietet. Werden unveraendert an das Backend
+    #: durchgereicht; das Gateway prueft sie nicht und ruft sie nicht auf.
+    tools: list[dict[str, Any]] = Field(default_factory=list)
+    tool_choice: Optional[Any] = None
 
     #: Denkschritte anfordern. ``None`` heisst: das Gateway entscheidet anhand
     #: der Faehigkeiten des Modells. Ollama liefert ``thinking`` nur, wenn es

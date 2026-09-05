@@ -65,10 +65,10 @@ In den Einstellungen dann die `tailscale serve`-URL und den Token eintragen.
 ## Agenten-Werkzeuge
 
 Unter `/openai/v1` spricht das Gateway zusätzlich das
-Chat-Completions-Format, damit sich Werkzeuge wie Aider oder Continue auf die
-lokalen Modelle richten lassen. Die Oberfläche ist standardmäßig aus und
-braucht ein **eigenes** Token — Details und Sicherheitsmodell in
-[AGENTS.md](AGENTS.md).
+Chat-Completions-Format, inklusive Werkzeugaufrufen. Damit lassen sich
+Agenten-Werkzeuge über das Tailnet auf die lokalen Modelle richten. Die
+Oberfläche ist standardmäßig aus und braucht ein **eigenes** Token — Details
+und Sicherheitsmodell in [AGENTS.md](AGENTS.md).
 
 ## Leitgedanken
 
@@ -99,8 +99,6 @@ und unter Windows. `flutter analyze` ist sauber, Tests siehe
 
 Offen:
 
-- Tool-Calling fehlt, damit auch Agenten-CLIs, die Werkzeuge aufrufen
-  (siehe [AGENTS.md](AGENTS.md))
 - das JSON-Schema von `amdgpu_top` variiert zwischen Versionen; einmal
   `amdgpu_top --json --single` laufen lassen und `_probe_amdgpu_top()` abgleichen
 - Entladen bei LM Studio geht nur über die CLI (`lms`), das Gateway meldet

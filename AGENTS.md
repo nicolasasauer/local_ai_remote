@@ -43,6 +43,7 @@ Fehler, der die Kandidaten nennt.
 | `POST /openai/v1/chat/completions` | streamend und nicht-streamend |
 | Denkschritte | als `reasoning_content`, getrennt vom Antworttext |
 | `usage` | echte Tokenzahlen beider Backends, im Stream auf Anforderung |
+| Werkzeugaufrufe | `tools`, `tool_choice`, `tool_calls`, Rolle `tool` |
 | Bilder | nur als `data:`-URL |
 
 ### Parameter
@@ -55,7 +56,6 @@ als `max_completion_tokens`), `stop`, `seed`, `presence_penalty`,
 
 | Parameter | Warum |
 |---|---|
-| `tools`, `tool_choice` | noch nicht unterstützt; ein Agent würde sonst auf Werkzeugaufrufe warten, die nie kommen, und es endlos neu versuchen |
 | `n` > 1 | es kommt immer genau eine Antwort |
 | `logprobs` | die Backends reichen sie nicht durch |
 | `response_format: json_schema` | nur `json_object` geht |
@@ -68,6 +68,31 @@ Unbekannte Felder (`user`, `logit_bias`, …) werden verworfen, ohne die
 Anfrage zu kippen — sonst wäre die Oberfläche mit realen Clients unbrauchbar.
 
 Nicht enthalten: Embeddings, Completions im alten Format.
+
+### Werkzeugaufrufe
+
+Die beiden Backends liefern sie in unvereinbarer Form, das Gateway gleicht das
+an:
+
+| | Ollama | LM Studio |
+|---|---|---|
+| Zustellung | vollständig in einem Chunk | Fragmente, nach `index` zusammenzusetzen |
+| `arguments` | Objekt | String, über mehrere Chunks verteilt |
+| `finish_reason` | meldet `stop` | meldet `tool_calls` |
+
+Nach außen kommt in beiden Fällen dasselbe: ein vollständiger Aufruf im
+OpenAI-Format mit `arguments` als String und `finish_reason: "tool_calls"`.
+Ein halber Aufruf wäre wertlos — der Client kann ihn weder ausführen noch
+anzeigen —, deshalb wird bei LM Studio erst am Ende des Stroms ausgeliefert.
+
+Der Rückweg funktioniert ebenso: eine `assistant`-Nachricht mit `tool_calls`
+und die zugehörigen `tool`-Nachrichten gehen in der jeweils erwarteten Form
+zurück ans Backend. Ollama ordnet Ergebnisse über den **Namen** zu, LM Studio
+über die **`tool_call_id`** — beides wird mitgeführt.
+
+Geprüft mit einer vollständigen Agentenschleife (Frage → Aufruf → lokale
+Ausführung → Ergebnis → Antwort) gegen beide Backends, streamend und
+nicht-streamend.
 
 ## Sicherheitsmodell
 
@@ -150,31 +175,23 @@ zweite. `GATEWAY_HOST=0.0.0.0` gehört nur in eine lokale, nicht eingecheckte
 `.env` für Emulator-Tests — im LAN wäre das Gateway damit für jeden Nachbarn
 im selben Netz erreichbar.
 
-## Nächster Schritt: Tool-Calling
-
-Ohne Tool-Calling sind Werkzeuge nutzbar, die mit reinem Text arbeiten (Aider
-etwa erzeugt Diffs im Antworttext). Agenten-CLIs, die Werkzeuge aufrufen,
-brauchen mehr. Nötig wären:
-
-1. `tools` und `tool_choice` in `ChatRequest`, durchgereicht an beide Backends
-2. die Rolle `tool` und das Feld `tool_calls` in `ChatMessage`
-3. ein Ereignistyp `ToolCall`, analog zum `Reasoning`-Kanal
-4. Zusammensetzen der OpenAI-Fragmente: `tool_calls` kommen indiziert und
-   stückweise, die Argumente über mehrere Chunks verteilt
-
-Strukturell dieselbe Arbeit wie beim Denkschritt-Kanal, nur umfangreicher. Die
-Sicherheitsregeln dabei:
+## Was beim Werkzeugeinsatz gilt
 
 - Das Gateway **interpretiert Werkzeugaufrufe nicht** und führt sie nicht aus.
-  Es kennt weder die Namen noch die Bedeutung der Werkzeuge.
+  Es kennt weder die Namen noch die Bedeutung der Werkzeuge; es setzt bei
+  LM Studio nur die Fragmente zusammen und übersetzt die Argumente zwischen
+  Objekt und String.
 - Werkzeug-Ergebnisse, die der Client zurückschickt, sind Daten. Sie gehen
   unverändert ins nächste Prompt und lösen im Gateway nichts aus.
-- Die Argumente eines Werkzeugaufrufs sind Modellausgabe, also unvertrauenswürdig.
-  Prüfen muss sie der Client, der sie ausführt.
-- Für Werkzeug-Ergebnisse gilt dieselbe Größengrenze wie für alles andere.
+- Die Argumente eines Aufrufs sind **Modellausgabe, also unvertrauenswürdig**.
+  Prüfen muss sie der Client, der sie ausführt — das Gateway kann nicht
+  wissen, ob `{"pfad": "../../etc/passwd"}` gemeint war oder untergeschoben.
+- Ein Modell ohne `tools`-Fähigkeit ignoriert die Werkzeuge stillschweigend;
+  `/v1/models` zeigt die Fähigkeit pro Ollama-Modell an, LM Studio meldet sie
+  nicht.
 
-Realistisch sind dafür `qwen3-coder:30b` oder die Qwen3.6-Modelle — kleinere
-drehen sich bei Werkzeugketten im Kreis. Und die gemeldeten 262k Kontext sind
+Realistisch sind `qwen3-coder:30b` oder die Qwen3.6-Modelle — kleinere drehen
+sich bei Werkzeugketten im Kreis. Und die gemeldeten 262k Kontext sind
 theoretisch: der KV-Cache dafür passt nicht in den VRAM, die Fenster müssen
 deutlich kleiner gefahren werden.
 

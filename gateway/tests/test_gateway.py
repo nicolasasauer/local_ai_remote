@@ -16,7 +16,14 @@ from fastapi.testclient import TestClient
 
 from gateway import main as gw
 from gateway import openai_api
-from gateway.backends.base import Backend, Delta, Done, Reasoning, Status
+from gateway.backends.base import (
+    Backend,
+    Delta,
+    Done,
+    Reasoning,
+    Status,
+    ToolCalls,
+)
 from gateway.config import Config, ConfigError, _load_env_file
 from gateway.schema import (
     BackendHealth,
@@ -27,6 +34,7 @@ from gateway.schema import (
     Fact,
     ModelEntry,
     ModelState,
+    ToolCall,
 )
 
 TOKEN = "test-token-mit-genug-laenge"
@@ -42,6 +50,9 @@ class FakeBackend(Backend):
         #: Wenn gesetzt, antwortet die Attrappe mit einem anderen Modell -
         #: so verhaelt sich LM Studio, wenn ein anderes geladen ist.
         self.served_model: str | None = None
+        #: Wenn True, fordert die Attrappe einen Werkzeugaufruf an, sobald
+        #: der Aufrufer Werkzeuge anbietet.
+        self.ruft_werkzeug_auf = True
 
     async def health(self) -> BackendHealth:
         return BackendHealth(backend=self.id, reachable=True, version=Fact.of("1.0"))
@@ -63,6 +74,19 @@ class FakeBackend(Backend):
     async def stream_chat(self, req: ChatRequest) -> AsyncIterator:
         self.seen.append(req)
         yield Status("generating", None)
+        if req.tools and self.ruft_werkzeug_auf:
+            yield ToolCalls([
+                ToolCall(id="call_1", name="wetter",
+                         arguments='{"stadt": "Berlin"}')
+            ])
+            yield Done(
+                ChatMetrics(
+                    total_ms=Fact.of(12.0),
+                    stop_reason=Fact.of("tool_calls"),
+                    served_model=Fact.of(self.served_model or req.model),
+                )
+            )
+            return
         yield Reasoning("erst denken")
         yield Delta("dann ")
         yield Delta("antworten")
@@ -460,15 +484,6 @@ class TestOpenAiParameter:
         _completion(agent_client, stop="ENDE")
         assert backends[BackendId.ollama].seen[-1].stop == ["ENDE"]
 
-    def test_tools_werden_klar_abgelehnt(self, agent_client):
-        # Sonst wartet ein Agent auf Werkzeugaufrufe, die nie kommen.
-        r = _completion(
-            agent_client,
-            tools=[{"type": "function", "function": {"name": "lies_datei"}}],
-        )
-        assert r.status_code == 400
-        assert "Tool-Calling" in r.json()["error"]["message"]
-
     def test_n_groesser_eins_wird_abgelehnt(self, agent_client):
         r = _completion(agent_client, n=3)
         assert r.status_code == 400
@@ -487,3 +502,93 @@ class TestOpenAiParameter:
         assert schema.status_code == 400
         objekt = _completion(agent_client, response_format={"type": "json_object"})
         assert objekt.status_code == 200
+
+WERKZEUG = {
+    "type": "function",
+    "function": {
+        "name": "wetter",
+        "description": "Wetter fuer eine Stadt",
+        "parameters": {
+            "type": "object",
+            "properties": {"stadt": {"type": "string"}},
+            "required": ["stadt"],
+        },
+    },
+}
+
+
+class TestWerkzeugaufrufe:
+    """Das Gateway reicht Aufrufe durch - es fuehrt nichts aus."""
+
+    def test_werkzeuge_erreichen_das_backend_unveraendert(self, agent_client, backends):
+        _completion(agent_client, tools=[WERKZEUG])
+        assert backends[BackendId.ollama].seen[-1].tools == [WERKZEUG]
+
+    def test_tool_choice_wird_durchgereicht(self, agent_client, backends):
+        _completion(agent_client, tools=[WERKZEUG], tool_choice="required")
+        assert backends[BackendId.ollama].seen[-1].tool_choice == "required"
+
+    def test_antwort_traegt_die_aufrufe_im_openai_format(self, agent_client):
+        data = _completion(agent_client, tools=[WERKZEUG]).json()
+        choice = data["choices"][0]
+
+        assert choice["finish_reason"] == "tool_calls"
+        aufruf = choice["message"]["tool_calls"][0]
+        assert aufruf["type"] == "function"
+        assert aufruf["function"]["name"] == "wetter"
+        # Argumente bleiben ein String, unveraendert vom Modell.
+        assert json.loads(aufruf["function"]["arguments"]) == {"stadt": "Berlin"}
+        assert choice["message"]["content"] is None
+
+    def test_stream_liefert_die_aufrufe_vollstaendig(self, agent_client):
+        r = _completion(agent_client, tools=[WERKZEUG], stream=True)
+        chunks = [
+            json.loads(l[5:]) for l in r.text.splitlines()
+            if l.startswith("data:") and l[5:].strip() != "[DONE]"
+        ]
+        aufrufe = [
+            tc for c in chunks for ch in c["choices"]
+            for tc in (ch["delta"].get("tool_calls") or [])
+        ]
+
+        assert len(aufrufe) == 1, "ein Aufruf, nicht in Fragmenten"
+        assert aufrufe[0]["index"] == 0
+        assert aufrufe[0]["function"]["name"] == "wetter"
+        assert json.loads(aufrufe[0]["function"]["arguments"]) == {"stadt": "Berlin"}
+        assert chunks[-1]["choices"][0]["finish_reason"] == "tool_calls"
+
+    def test_werkzeugergebnis_geht_zurueck_ins_gespraech(self, agent_client, backends):
+        # Der zweite Zug: Aufruf und Ergebnis kommen als Verlauf zurueck.
+        backends[BackendId.ollama].ruft_werkzeug_auf = False
+        _completion(
+            agent_client,
+            tools=[WERKZEUG],
+            messages=[
+                {"role": "user", "content": "Wetter in Berlin?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "call_1", "type": "function",
+                        "function": {"name": "wetter",
+                                     "arguments": '{"stadt": "Berlin"}'},
+                    }],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "name": "wetter",
+                 "content": "12 Grad, bewoelkt"},
+            ],
+        )
+        verlauf = backends[BackendId.ollama].seen[-1].messages
+
+        assert verlauf[1].tool_calls[0].name == "wetter"
+        assert verlauf[1].tool_calls[0].arguments == '{"stadt": "Berlin"}'
+        assert verlauf[2].role == "tool"
+        assert verlauf[2].content == "12 Grad, bewoelkt"
+        assert verlauf[2].tool_call_id == "call_1"
+        # Ollama ordnet ueber den Namen zu, nicht ueber die Id.
+        assert verlauf[2].tool_name == "wetter"
+
+    def test_ohne_werkzeuge_bleibt_alles_wie_bisher(self, agent_client):
+        data = _completion(agent_client).json()
+        assert data["choices"][0]["message"]["content"] == "dann antworten"
+        assert "tool_calls" not in data["choices"][0]["message"]

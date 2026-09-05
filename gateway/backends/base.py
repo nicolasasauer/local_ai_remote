@@ -13,6 +13,7 @@ from ..schema import (
     ChatMetrics,
     ChatRequest,
     ModelEntry,
+    ToolCall,
 )
 
 
@@ -50,6 +51,19 @@ class Reasoning(ChatEvent):
 
     def __init__(self, text: str) -> None:
         self.text = text
+
+
+class ToolCalls(ChatEvent):
+    """Das Modell moechte Werkzeuge aufrufen.
+
+    Kommt vollstaendig, nie stueckweise: Ollama liefert die Aufrufe in einem
+    Zug, bei LM Studio setzt der Adapter die Fragmente vorher zusammen. Ein
+    halber Aufruf waere fuer den Client wertlos - er kann ihn nicht ausfuehren
+    und nicht anzeigen.
+    """
+
+    def __init__(self, calls: list[ToolCall]) -> None:
+        self.calls = calls
 
 
 class Status(ChatEvent):
