@@ -29,6 +29,7 @@ from .backends.lmstudio import LmStudioBackend
 from .backends.ollama import OllamaBackend
 from .config import CONFIG, ConfigError
 from .openai_api import router as openai_router
+from .responses_api import router as responses_router
 from .schema import (
     BackendId,
     ChatRequest,
@@ -65,6 +66,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Local AI Gateway", version=VERSION, lifespan=lifespan)
 app.include_router(openai_router)
+app.include_router(responses_router)
 
 
 @app.exception_handler(HTTPException)

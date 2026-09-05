@@ -40,6 +40,7 @@ Fehler, der die Kandidaten nennt.
 | | |
 |---|---|
 | `GET /openai/v1/models` | beide Backends in einer Liste |
+| `POST /openai/v1/responses` | Responses-API, weitergeleitet (siehe unten) |
 | `POST /openai/v1/chat/completions` | streamend und nicht-streamend |
 | Denkschritte | als `reasoning_content`, getrennt vom Antworttext |
 | `usage` | echte Tokenzahlen beider Backends, im Stream auf Anforderung |
@@ -194,6 +195,53 @@ Realistisch sind `qwen3-coder:30b` oder die Qwen3.6-Modelle — kleinere drehen
 sich bei Werkzeugketten im Kreis. Und die gemeldeten 262k Kontext sind
 theoretisch: der KV-Cache dafür passt nicht in den VRAM, die Fenster müssen
 deutlich kleiner gefahren werden.
+
+## Responses-API und die Codex CLI
+
+Die Codex CLI (ab 0.133) unterstützt `wire_api = "chat"` **nicht mehr** und
+verlangt die Responses-API. Beide Backends implementieren die Route bereits
+nativ und in derselben Form, deshalb *leitet* das Gateway hier weiter, statt
+zu übersetzen:
+
+```toml
+# ~/.codex/config.toml
+model = "ollama/<modell>"
+model_provider = "lokalgw"
+
+[model_providers.lokalgw]
+name = "Lokales Gateway"
+base_url = "https://desktop.tailnet.ts.net/openai/v1"
+env_key = "LOKAL_API_KEY"
+wire_api = "responses"
+```
+
+Ohne das Gateway funktioniert das **nicht** — und zwar aus zwei Gründen, die
+nichts mit dem Tailnet zu tun haben:
+
+**1. Codex bietet eingebaute Werkzeugtypen an.** Neben seinen Funktionen
+schickt es `image_generation`, `web_search` und `namespace` mit. Ollama
+antwortet darauf mit `HTTP 500: Failed to parse tools: Unsupported tool type` —
+eine einzige Zeile in der Werkzeugliste macht die ganze Sitzung unbrauchbar.
+Das Gateway behält die Funktionen und verwirft den Rest.
+
+**2. Codex schickt `instructions` und zusätzlich einen `developer`-Eintrag.**
+Ollama macht daraus zwei Systemnachrichten. Strenge Chat-Vorlagen — Qwen3.6
+etwa — brechen dann mit `Jinja Exception: System message must be at the
+beginning` ab. Das Gateway faltet beides zu einer Anweisung am Anfang
+zusammen; Inhalt und Reihenfolge bleiben erhalten.
+
+Beides ist ein bewusster Verstoß gegen den Grundsatz „nichts still anders
+machen als angefordert" — hier ist die Alternative aber, dass gar nichts
+läuft. Verworfene Werkzeugtypen und die Faltung werden deshalb im
+Gateway-Protokoll vermerkt.
+
+Geprüft mit Codex 0.133 gegen beide Backends: das Modell liest über Codex'
+eigenes Shell-Werkzeug eine Datei und antwortet korrekt. Direkt gegen Ollama
+scheitert dieselbe Anfrage.
+
+Was die Weiterleitung kostet: Antwortfelder kommen unverändert vom Backend,
+also ohne die gemeinsame Form der übrigen Routen. Für eine Agenten-CLI ist das
+richtig — sie erwartet die Form ihres Anbieters.
 
 ## Danach, vielleicht: `/v1/messages`
 
