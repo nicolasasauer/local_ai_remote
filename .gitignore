@@ -21,6 +21,10 @@ app/windows/
 app/linux/
 app/macos/
 app/web/
+# Boilerplate, das `flutter create` immer wieder anlegt - das Root-README
+# deckt alles ab.
+app/README.md
+app/test/widget_test.dart
 app/.idea/
 *.iml
 
