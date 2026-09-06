@@ -25,7 +25,8 @@ Auth-Schicht vor Server setzen, die selbst keine haben.
 **Desktop**
 
 ```powershell
-pip install -r gatewayequirements.txt
+pip install -r gateway
+equirements.txt
 Copy-Item gateway\.env.example gateway\.env
 # GATEWAY_TOKEN setzen:
 python -c "import secrets; print(secrets.token_urlsafe(32))"
@@ -84,6 +85,7 @@ In den Einstellungen dann die `tailscale serve`-URL und den Token eintragen.
 | `app/lib/src/data/` | SQLite-Store, HTTP-Client, Token-Schätzung |
 | `app/lib/src/chat/` | Zustandsmaschine des Sendevorgangs, Kontextverdichtung |
 | `app/lib/src/ui/` | Oberfläche |
+| `app/assets/icon/` | Icon-Quelle, erzeugt von `app/tool/icon_erzeugen.py` |
 | `search/` | lokale Suchquelle (SearXNG) als `docker compose` |
 | `start.ps1` | prüft die Voraussetzungen und startet alles |
 | `API_CONTRACT.md` | Schnittstelle zwischen beiden Hälften |

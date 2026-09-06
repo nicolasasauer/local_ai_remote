@@ -35,5 +35,29 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^4.0.0
 
+  # Erzeugt die Icon-Groessen fuer Android und Windows aus assets/icon/.
+  # Noetig, weil die Plattformordner nicht im Repo liegen: dort abgelegte
+  # Icons waeren beim naechsten `flutter create` weg.
+  flutter_launcher_icons: ^0.14.4
+
 flutter:
   uses-material-design: true
+
+# Quelle: assets/icon/, erzeugt von tool/icon_erzeugen.py.
+# Neu erzeugen mit: dart run flutter_launcher_icons
+flutter_launcher_icons:
+  image_path: "assets/icon/icon.png"
+
+  android: true
+  # Adaptives Icon: Android beschneidet den Vordergrund je nach Geraet zu
+  # Kreis, Quadrat oder Kleeblatt - deshalb traegt er den Hintergrund nicht
+  # selbst, sondern bekommt ihn als Flaeche daneben.
+  adaptive_icon_background: "#0F1418"
+  adaptive_icon_foreground: "assets/icon/icon_foreground.png"
+  # Monochrom fuer Material You: Android faerbt es selbst ein.
+  adaptive_icon_monochrome: "assets/icon/icon_foreground.png"
+
+  windows:
+    generate: true
+    image_path: "assets/icon/icon.png"
+    icon_size: 256

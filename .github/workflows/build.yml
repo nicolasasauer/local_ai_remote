@@ -53,8 +53,11 @@ jobs:
       # `flutter create` legt ein widget_test.dart fuer eine Beispiel-App an,
       # das gegen diesen Baum nicht kompiliert.
       - run: flutter create --platforms=android --org de.nicolas .
-      - run: rm -f test/widget_test.dart
+      - run: rm -f test/widget_test.dart README.md
       - run: flutter pub get
+      # Die Icons liegen in den generierten Plattformordnern - ohne diesen
+      # Schritt traegt die APK das Flutter-Standardicon.
+      - run: dart run flutter_launcher_icons
       - run: flutter build apk --release
       - uses: actions/upload-artifact@v4
         with:
@@ -75,9 +78,10 @@ jobs:
       - run: flutter create --platforms=windows --org de.nicolas .
       # Auf windows-latest ist die Standardshell PowerShell, dort gibt es
       # kein `rm -f`.
-      - run: rm -f test/widget_test.dart
+      - run: rm -f test/widget_test.dart README.md
         shell: bash
       - run: flutter pub get
+      - run: dart run flutter_launcher_icons
       - run: flutter build windows --release
       - uses: actions/upload-artifact@v4
         with:
