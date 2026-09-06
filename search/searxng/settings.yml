@@ -1,0 +1,31 @@
+# SearXNG fuer die Recherche-Werkzeuge des Gateways.
+#
+# Alles Uebrige kommt aus den Voreinstellungen des Abbilds; hier steht nur,
+# was fuer diesen Zweck abweichen muss.
+
+use_default_settings: true
+
+server:
+  # Der Schluessel kommt aus der Umgebung (SEARXNG_SECRET in der compose.yaml),
+  # damit hier kein Geheimnis im Repo landet.
+  secret_key: ""
+  # Ein Nutzer, eine Instanz. Der Limiter ist fuer oeffentliche Instanzen
+  # gedacht und wuerde das Gateway nach wenigen Anfragen ausbremsen.
+  limiter: false
+  image_proxy: false
+
+search:
+  # **Der entscheidende Punkt.** Ohne `json` liefert SearXNG auf
+  # `?format=json` ein 403 - die Weboberflaeche funktioniert dann, das
+  # Gateway aber nicht.
+  formats:
+    - html
+    - json
+
+  # Fuer eine Recherche zaehlt, dass ueberhaupt etwas Brauchbares kommt;
+  # eine strenge Sprachfilterung wirft zu viel weg.
+  default_lang: "all"
+  safe_search: 0
+
+ui:
+  static_use_hash: true

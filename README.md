@@ -24,12 +24,38 @@ Auth-Schicht vor Server setzen, die selbst keine haben.
 
 **Desktop**
 
+```powershell
+pip install -r gatewayequirements.txt
+Copy-Item gateway\.env.example gateway\.env
+# GATEWAY_TOKEN setzen:
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+
+tailscale serve --bg 8765     # einmalig, HTTPS nach draußen ins Tailnet
+.\start.ps1
+```
+
+`start.ps1` prüft der Reihe nach, was fehlt, startet auf Wunsch die lokale
+Suchquelle und dann das Gateway im Vordergrund. Was nicht läuft, wird beim
+Namen genannt statt in einer Fehlermeldung zu verschwinden:
+
+```
+Voraussetzungen
+  [ok]   gateway\.env sieht brauchbar aus.
+  [ok]   Python-Pakete vollstaendig.
+Inferenz-Server
+  [ok]   Ollama laeuft (Port 11434).
+  [!]    LM Studio laeuft nicht - GUI starten oder: lms server start.
+Suchquelle
+  [ok]   SearXNG laeuft auf http://127.0.0.1:8888
+```
+
+Ein fehlendes Backend ist kein Abbruchgrund — das Gateway zeigt es als „nicht
+erreichbar" an, das andere funktioniert weiter.
+
+Ohne Skript geht es genauso von Hand:
+
 ```bash
-cd gateway
-pip install -r requirements.txt
-cp .env.example .env          # Token setzen
 python -m gateway.main        # lauscht auf 127.0.0.1:8765
-tailscale serve --bg 8765     # HTTPS nach draußen ins Tailnet
 ```
 
 Ollama braucht keine Sonderbehandlung, solange das Gateway lokal läuft.
@@ -58,6 +84,8 @@ In den Einstellungen dann die `tailscale serve`-URL und den Token eintragen.
 | `app/lib/src/data/` | SQLite-Store, HTTP-Client, Token-Schätzung |
 | `app/lib/src/chat/` | Zustandsmaschine des Sendevorgangs, Kontextverdichtung |
 | `app/lib/src/ui/` | Oberfläche |
+| `search/` | lokale Suchquelle (SearXNG) als `docker compose` |
+| `start.ps1` | prüft die Voraussetzungen und startet alles |
 | `API_CONTRACT.md` | Schnittstelle zwischen beiden Hälften |
 | `AGENTS.md` | OpenAI-kompatible Oberfläche und ihr Sicherheitsmodell |
 | `TESTING.md` | was automatisiert läuft, was von Hand geprüft wird |
@@ -87,9 +115,10 @@ Link-Local, Cloud-Metadaten — und ausdrücklich `100.64.0.0/10`, weil Python
 Tailscale-Adressen nicht als privat kennt und dort dieses Gateway selbst
 steht.
 
-Eine Suchquelle muss eingerichtet werden (`searxng` oder `brave`); ohne sie
-bietet das Gateway nur den Seitenabruf an. Ein lokales SearXNG passt am besten
-zum Rest des Projekts.
+Für die Websuche braucht es eine Quelle. Ein lokales SearXNG liegt als
+`docker compose` bei und passt am besten zum Rest des Projekts — siehe
+[search/README.md](search/README.md). Ohne Quelle bietet das Gateway nur den
+Seitenabruf an.
 
 ## Leitgedanken
 

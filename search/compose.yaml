@@ -1,0 +1,44 @@
+# Lokale Suchquelle fuer die Recherche-Werkzeuge des Gateways.
+#
+# SearXNG fragt oeffentliche Suchmaschinen ab und gibt die Treffer gebuendelt
+# zurueck. Es passt zum Rest des Projekts: die Suche laeuft auf demselben
+# Rechner wie die Modelle, es braucht keinen API-Schluessel, und keine Anfrage
+# traegt eine Kennung, die sich auf dich zurueckfuehren laesst.
+#
+#   cd search && docker compose up -d
+#
+# Danach im Gateway:
+#   GATEWAY_SEARCH_PROVIDER=searxng
+#   GATEWAY_SEARXNG_URL=http://127.0.0.1:8888
+
+services:
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    container_name: local-ai-remote-searxng
+    restart: unless-stopped
+    # Nur auf Loopback. Nach draussen geht nichts: das Gateway ist der
+    # einzige Aufrufer, und das laeuft auf demselben Rechner.
+    ports:
+      - "127.0.0.1:8888:8080"
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    environment:
+      # Muss zur veroeffentlichten Adresse passen, sonst baut SearXNG falsche
+      # Links in die Trefferliste.
+      SEARXNG_BASE_URL: "http://127.0.0.1:8888/"
+      # Ein Nutzer, eine Instanz - der Standard ist auf viele Nutzer ausgelegt
+      # und wuerde das Gateway ausbremsen.
+      SEARXNG_LIMITER: "false"
+      # Aus search/.env, nicht im Repo.
+      SEARXNG_SECRET: "${SEARXNG_SECRET:?SEARXNG_SECRET fehlt - siehe search/README.md}"
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "1"
