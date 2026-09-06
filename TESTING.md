@@ -31,6 +31,12 @@ ersetzt, die App-Tests nutzen eine SQLite-Datenbank im Arbeitsspeicher.
 | `app/test/gateway_client_test.dart` | SSE-Zerlegung, Denkschritte als eigener Ereignistyp, Fehler mitten im Stream, und dass ein Abbruch die Verbindung wirklich schliesst |
 | `app/test/chat_store_test.dart` | Umbenennen und Modellwechsel lassen den Verlauf stehen, Löschen räumt Nachrichten mit ab, `recoverInterrupted` markiert hängengebliebene Antworten, Denkschritte werden getrennt vom Antworttext persistiert |
 
+`gateway/tests/conftest.py` setzt vor jedem Test eine neutrale Konfiguration:
+alles aus, nichts eingerichtet. Ohne das entscheidet die lokale `gateway/.env`
+darüber, was ein Test vorfindet — wer Recherche eingeschaltet hat, sieht
+andere Ergebnisse als die CI. Genau das ist dreimal passiert, bis der
+Ausgangszustand erzwungen wurde.
+
 Die beiden `upsertChat`-Tests sind gegen die alte Implementierung gegengeprüft:
 mit `ConflictAlgorithm.replace` schlagen sie fehl (`Actual: []`), mit dem
 UPSERT gehen sie durch. Ein Regressionstest, der den Fehler nicht fängt, wäre

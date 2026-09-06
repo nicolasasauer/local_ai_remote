@@ -191,14 +191,27 @@ class TestAusfuehrung:
                 )
 
     @pytest.mark.asyncio
-    async def test_ohne_suchquelle_kommt_eine_begruendung(self):
+    async def test_ohne_suchquelle_kommt_eine_begruendung(self, monkeypatch):
+        monkeypatch.setattr(
+            research, "CONFIG", dataclasses.replace(gw.CONFIG, search_provider="none")
+        )
         async with httpx.AsyncClient() as http:
             with pytest.raises(RechercheFehler, match="Keine Suchquelle"):
                 await ausfuehren(http, research.WEB_SUCHE, '{"query": "irgendwas"}')
 
 
 class TestKatalog:
-    def test_ohne_suchquelle_wird_suche_nicht_angeboten(self):
+    """Der Katalog haengt an der Konfiguration - die wird hier gesetzt, nicht
+    aus der Umgebung uebernommen. Sonst entscheidet eine lokale .env darueber,
+    was der Test vorfindet."""
+
+    def _mit(self, monkeypatch, **felder):
+        monkeypatch.setattr(
+            research, "CONFIG", dataclasses.replace(gw.CONFIG, **felder)
+        )
+
+    def test_ohne_suchquelle_wird_suche_nicht_angeboten(self, monkeypatch):
+        self._mit(monkeypatch, search_provider="none", searxng_url="", brave_key="")
         namen = [w["function"]["name"] for w in research.katalog()]
         # Ein Werkzeug anzubieten, das dann an der Konfiguration scheitert,
         # kostet einen Zug und eine Freigabe fuer nichts.
@@ -206,12 +219,19 @@ class TestKatalog:
         assert research.SEITE_ABRUFEN in namen
 
     def test_mit_suchquelle_ist_die_suche_dabei(self, monkeypatch):
-        cfg = dataclasses.replace(
-            gw.CONFIG, search_provider="searxng", searxng_url="http://such.example"
+        self._mit(
+            monkeypatch, search_provider="searxng", searxng_url="http://such.example"
         )
-        monkeypatch.setattr(research, "CONFIG", cfg)
         namen = [w["function"]["name"] for w in research.katalog()]
         assert research.WEB_SUCHE in namen
+
+    def test_eingetragene_quelle_ohne_adresse_zaehlt_nicht(self, monkeypatch):
+        # Ein Werkzeug anzubieten, das an fehlender Adresse scheitert, kostet
+        # einen Zug und eine Freigabe fuer nichts.
+        self._mit(monkeypatch, search_provider="searxng", searxng_url="")
+        assert research.WEB_SUCHE not in [
+            w["function"]["name"] for w in research.katalog()
+        ]
 
     def test_erkennung_der_eigenen_werkzeuge(self):
         assert ist_recherchewerkzeug(research.WEB_SUCHE)
