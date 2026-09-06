@@ -52,6 +52,16 @@ class Config:
     telemetry_interval: float
     max_request_bytes: int
 
+    #: Recherche-Werkzeuge (Websuche, Seitenabruf). Standardmaessig aus: es
+    #: ist die einzige Stelle, an der das Gateway etwas ausfuehrt.
+    research_enabled: bool
+    search_provider: str
+    searxng_url: str
+    brave_key: str
+    research_timeout: float
+    research_max_results: int
+    research_max_chars: int
+
     @classmethod
     def from_env(cls) -> "Config":
         _load_env_file()
@@ -70,6 +80,14 @@ class Config:
             # schuetzt den Desktop davor, sich an einer einzigen Anfrage
             # den Speicher vollzuladen.
             max_request_bytes=int(os.getenv("GATEWAY_MAX_REQUEST_BYTES", str(32 * 1024 * 1024))),
+            research_enabled=os.getenv("GATEWAY_RESEARCH", "").strip().lower()
+            in ("1", "true", "ja", "an"),
+            search_provider=os.getenv("GATEWAY_SEARCH_PROVIDER", "none").strip().lower(),
+            searxng_url=os.getenv("GATEWAY_SEARXNG_URL", "").strip(),
+            brave_key=os.getenv("GATEWAY_BRAVE_KEY", "").strip(),
+            research_timeout=float(os.getenv("GATEWAY_RESEARCH_TIMEOUT", "20")),
+            research_max_results=int(os.getenv("GATEWAY_RESEARCH_MAX_RESULTS", "6")),
+            research_max_chars=int(os.getenv("GATEWAY_RESEARCH_MAX_CHARS", "12000")),
         )
 
     def check(self) -> None:
@@ -101,6 +119,19 @@ class Config:
     @property
     def agents_enabled(self) -> bool:
         return bool(self.agent_token)
+
+    @property
+    def suche_verfuegbar(self) -> bool:
+        """Ob eine Suchquelle wirklich benutzbar ist.
+
+        Eine Suche anzubieten, die dann an fehlender Konfiguration scheitert,
+        kostet das Modell einen Zug und den Nutzer eine Freigabe fuer nichts.
+        """
+        if self.search_provider == "searxng":
+            return bool(self.searxng_url)
+        if self.search_provider == "brave":
+            return bool(self.brave_key)
+        return False
 
 
 CONFIG = Config.from_env()

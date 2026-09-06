@@ -13,6 +13,7 @@ import httpx
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel
 from starlette.websockets import WebSocketDisconnect
 
 from .backends.base import (
@@ -30,6 +31,7 @@ from .backends.ollama import OllamaBackend
 from .config import CONFIG, ConfigError
 from .openai_api import router as openai_router
 from .responses_api import router as responses_router
+from . import research
 from .schema import (
     BackendId,
     ChatRequest,
@@ -191,6 +193,18 @@ HEARTBEAT_INTERVAL = 10.0
 async def chat(req: ChatRequest, _: None = Depends(require_token)) -> StreamingResponse:
     backend = _backend(req.backend)
 
+    if req.research:
+        if not CONFIG.research_enabled:
+            raise HTTPException(
+                status_code=409,
+                detail="Recherche ist auf diesem Gateway nicht eingeschaltet "
+                "(GATEWAY_RESEARCH=1).",
+            )
+        # Der Katalog gehoert dem Gateway, nicht dem Aufrufer. Die App
+        # schaltet Recherche ein oder aus; sie kann keine eigenen Werkzeuge
+        # definieren, die das Gateway dann ausfuehren wuerde.
+        req = req.model_copy(update={"tools": research.katalog()})
+
     async def produce(queue: "asyncio.Queue[str | None]") -> None:
         try:
             # Wenn das Modell kalt ist, dauert der erste Token oft Minuten.
@@ -280,6 +294,48 @@ async def chat(req: ChatRequest, _: None = Depends(require_token)) -> StreamingR
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+class ResearchRequest(BaseModel):
+    """Ein Werkzeugaufruf, den der Nutzer in der App freigegeben hat."""
+
+    name: str
+    arguments: str = "{}"
+
+
+@app.post("/v1/research")
+async def research_ausfuehren(
+    req: ResearchRequest, _: None = Depends(require_token)
+) -> dict:
+    """Fuehrt genau einen freigegebenen Recherche-Aufruf aus.
+
+    Bewusst ein eigener Endpunkt statt eines Schritts im Chat-Stream: so
+    laeuft nichts, ohne dass die App es einzeln angefordert hat. Zwischen
+    Vorschlag des Modells und Ausfuehrung liegt eine Nutzerentscheidung.
+    """
+    if not CONFIG.research_enabled:
+        raise HTTPException(
+            status_code=409,
+            detail="Recherche ist auf diesem Gateway nicht eingeschaltet "
+            "(GATEWAY_RESEARCH=1).",
+        )
+    if not research.ist_recherchewerkzeug(req.name):
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{req.name}' ist kein Recherche-Werkzeug dieses Gateways.",
+        )
+    if _http is None:
+        raise HTTPException(status_code=503, detail="Gateway startet noch")
+
+    try:
+        ergebnis = await research.ausfuehren(_http, req.name, req.arguments)
+    except research.RechercheFehler as exc:
+        # Der Grund geht an die App und von dort ins Gespraech: ein
+        # gescheiterter Abruf ist eine Information, kein stiller Ausfall.
+        raise HTTPException(status_code=422, detail=str(exc))
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Abruf fehlgeschlagen: {exc}")
+    return ergebnis.model_dump(mode="json")
 
 
 @app.websocket("/v1/telemetry")

@@ -183,6 +183,10 @@ class ChatRequest(BaseModel):
     tools: list[dict[str, Any]] = Field(default_factory=list)
     tool_choice: Optional[Any] = None
 
+    #: Recherche einschalten. Das Gateway haengt dann *seinen* Werkzeugkatalog
+    #: an - die App kann keine eigenen Werkzeuge vorgeben.
+    research: bool = False
+
     #: Denkschritte anfordern. ``None`` heisst: das Gateway entscheidet anhand
     #: der Faehigkeiten des Modells. Ollama liefert ``thinking`` nur, wenn es
     #: ausdruecklich angefordert wird - ohne das antwortet ein Reasoning-Modell

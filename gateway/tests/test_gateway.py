@@ -165,6 +165,13 @@ class TestConfig:
             request_timeout=1,
             telemetry_interval=1,
             max_request_bytes=1024,
+            research_enabled=False,
+            search_provider="none",
+            searxng_url="",
+            brave_key="",
+            research_timeout=5,
+            research_max_results=3,
+            research_max_chars=1000,
         )
 
     def test_leerer_token_wird_abgelehnt(self):

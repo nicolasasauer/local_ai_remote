@@ -70,6 +70,27 @@ Responses-API, jeweils mit Werkzeugaufrufen. Damit laufen Agenten-Werkzeuge
 Backends geprüft. Die Oberfläche ist standardmäßig aus und braucht ein
 **eigenes** Token; Details und Sicherheitsmodell in [AGENTS.md](AGENTS.md).
 
+## Recherche
+
+Das Gateway kann für die App im Web suchen und Seiten abrufen — die **einzige**
+Stelle, an der es etwas ausführt. Standardmäßig aus (`GATEWAY_RESEARCH=1`),
+und nichts läuft ohne Freigabe: das Modell *schlägt* einen Aufruf vor, in der
+App wird er einzeln bestätigt.
+
+Der Werkzeugkatalog gehört dem Gateway. Die App schaltet Recherche nur ein
+oder aus; sie kann keine eigenen Werkzeuge definieren, die das Gateway dann
+ausführen würde.
+
+Der Seitenabruf prüft die **aufgelöste** Adresse, nicht den Namen, und
+verfolgt Umleitungen selbst. Blockiert sind Loopback, private Netze,
+Link-Local, Cloud-Metadaten — und ausdrücklich `100.64.0.0/10`, weil Python
+Tailscale-Adressen nicht als privat kennt und dort dieses Gateway selbst
+steht.
+
+Eine Suchquelle muss eingerichtet werden (`searxng` oder `brave`); ohne sie
+bietet das Gateway nur den Seitenabruf an. Ein lokales SearXNG passt am besten
+zum Rest des Projekts.
+
 ## Leitgedanken
 
 **Nichts erfinden.** Jeder Wert, der fehlen kann, reist als `Fact` mit
