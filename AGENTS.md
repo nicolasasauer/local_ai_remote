@@ -160,6 +160,14 @@ während des Streams einen Hinweis. **Wer auf ein bestimmtes Modell angewiesen
 ist, muss `model` in der Antwort prüfen** — der angefragte Name ist keine
 Zusage.
 
+**Das Token steht nicht mehr im Protokoll.** Beim WebSocket reist es als
+Query-Parameter — Header sind dort nicht überall zuverlässig — und uvicorn
+protokolliert den vollständigen Pfad. Ein Filter an den Log-*Handlern* ersetzt
+den Wert; der Name bleibt stehen, damit das Protokoll brauchbar bleibt. Der
+Filter muss an den Handlern hängen und in der Startphase gesetzt werden: am
+Logger greift er nicht für heraufgereichte Meldungen, und uvicorn verwirft
+beim Start alles, was vorher gesetzt wurde.
+
 **Fehlermeldungen der Backends werden durchgereicht.** Darin können lokale
 Pfade stehen. Für ein persönliches Tailnet vertretbar, für einen geteilten
 Zugang nicht.

@@ -605,3 +605,35 @@ class TestWerkzeugaufrufe:
         data = _completion(agent_client).json()
         assert data["choices"][0]["message"]["content"] == "dann antworten"
         assert "tool_calls" not in data["choices"][0]["message"]
+
+
+class TestProtokoll:
+    """Das Token reist beim WebSocket als Query-Parameter - Header sind dort
+    nicht ueberall zuverlaessig. uvicorn protokolliert den vollen Pfad, und
+    damit stand das Geheimnis in jeder Logzeile."""
+
+    def _zeile(self, pfad: str):
+        import logging
+
+        return logging.LogRecord(
+            name="uvicorn.access", level=logging.INFO, pathname="", lineno=0,
+            msg='%s - "%s %s HTTP/%s" %d',
+            args=("127.0.0.1:1", "GET", pfad, "1.1", 200), exc_info=None,
+        )
+
+    def test_token_wird_aus_der_zeile_entfernt(self):
+        record = self._zeile("/v1/telemetry?token=streng-geheim-nicht-ins-log")
+        gw._TokenAusLogs().filter(record)
+
+        gerendert = record.getMessage()
+        assert "streng-geheim" not in gerendert
+        # Der Name bleibt stehen, nur der Wert verschwindet - sonst sieht man
+        # dem Protokoll nicht mehr an, worum es ging.
+        assert "token=<entfernt>" in gerendert
+        # Der Pfad bleibt lesbar, sonst waere das Protokoll wertlos.
+        assert "/v1/telemetry" in gerendert
+
+    def test_zeilen_ohne_token_bleiben_unangetastet(self):
+        record = self._zeile("/v1/models")
+        gw._TokenAusLogs().filter(record)
+        assert record.getMessage().endswith('"GET /v1/models HTTP/1.1" 200')

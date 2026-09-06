@@ -4,8 +4,14 @@
          Netzzugang - und das sieht dann aus, als sei das Gateway kaputt. -->
     <uses-permission android:name="android.permission.INTERNET"/>
 
+    <!-- allowBackup: ohne das gilt Androids Standard, und die Sicherung nimmt
+         die Einstellungen mit - samt Gateway-Token. Es landet damit in einem
+         Google-Konto und wird auf einem neuen Geraet wiederhergestellt, ohne
+         dass jemand danach gefragt haette. Ein Token neu einzutippen dauert
+         zwanzig Sekunden. -->
     <application
         android:label="Local AI Remote"
+        android:allowBackup="false"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import platform
+import re
 import secrets
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
@@ -49,10 +51,57 @@ _backends: dict[BackendId, Backend] = {}
 _reader = TelemetryReader()
 
 
+#: Der Name bleibt lesbar, nur der Wert verschwindet - sonst sieht man dem
+#: Protokoll nicht mehr an, worum es ging.
+_ERSATZ = r"\1<entfernt>"
+
+
+class _TokenAusLogs(logging.Filter):
+    """Haelt das Token aus dem Zugriffsprotokoll.
+
+    Beim WebSocket reist es als Query-Parameter - Header sind dort nicht
+    ueberall zuverlaessig (siehe API_CONTRACT.md). uvicorn protokolliert den
+    vollstaendigen Pfad, und damit stand das Geheimnis in jeder Logzeile:
+    Logs werden kopiert, in Fehlerberichte geklebt und liegen selten so
+    geschuetzt wie eine .env.
+    """
+
+    _MUSTER = re.compile(r"(token=)[^&\s\"]+")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.args and isinstance(record.args, tuple):
+            record.args = tuple(
+                self._MUSTER.sub(r"\1<entfernt>", a) if isinstance(a, str) else a
+                for a in record.args
+            )
+        if isinstance(record.msg, str):
+            record.msg = self._MUSTER.sub(r"\1<entfernt>", record.msg)
+        return True
+
+
+def _token_aus_logs_halten() -> None:
+    """Haengt den Filter an die **Handler**, nicht an die Logger.
+
+    Zwei Gruende: uvicorn richtet sein Logging beim Start per ``dictConfig``
+    ein und wuerde vorher gesetzte Logger-Filter verwerfen; und ein Filter am
+    Logger greift nicht fuer Meldungen, die von Kind-Loggern
+    heraufgereicht werden. Die WebSocket-Zeile kommt naemlich nicht vom
+    Zugriffslog, sondern von ``uvicorn.error``.
+    """
+    filt = _TokenAusLogs()
+    namen = ("", "uvicorn", "uvicorn.access", "uvicorn.error")
+    for name in namen:
+        for handler in logging.getLogger(name).handlers:
+            if not any(isinstance(f, _TokenAusLogs) for f in handler.filters):
+                handler.addFilter(filt)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Ein HTTP-Client fuer den gesamten Prozess: Verbindungen zu den Backends
     bleiben offen, statt pro Anfrage neu aufgebaut zu werden."""
+    _token_aus_logs_halten()
+
     global _http
     _http = httpx.AsyncClient(timeout=CONFIG.request_timeout)
     _backends[BackendId.ollama] = OllamaBackend(CONFIG.ollama_url, _http)
