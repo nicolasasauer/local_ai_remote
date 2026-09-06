@@ -4,7 +4,18 @@ app/.flutter-plugins
 app/.flutter-plugins-dependencies
 app/build/
 app/pubspec.lock
-app/android/
+# Die Plattformordner bleiben generiert - mit einer Ausnahme: ohne die
+# INTERNET-Berechtigung im Haupt-Manifest hat der Release-Build keinerlei
+# Netzzugang, und `flutter create` legt sie nur in die Debug- und
+# Profile-Manifeste. Die Datei ueberlebt ein erneutes `flutter create`.
+app/android/*
+!app/android/app/
+app/android/app/*
+!app/android/app/src/
+app/android/app/src/*
+!app/android/app/src/main/
+app/android/app/src/main/*
+!app/android/app/src/main/AndroidManifest.xml
 app/ios/
 app/windows/
 app/linux/

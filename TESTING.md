@@ -96,6 +96,31 @@ Schritt 5 lässt sich ohne App prüfen:
 curl -s -X POST http://127.0.0.1:8765/v1/research   -H "Authorization: Bearer $GATEWAY_TOKEN" -H "Content-Type: application/json"   -d '{"name":"fetch_url","arguments":"{\"url\": \"http://100.101.102.103/\"}"}'
 ```
 
+### Release-Build auf einem echten Gerät
+
+Der Release-Build verhält sich in zwei Punkten anders als der Debug-Build im
+Emulator, und beide fallen erst auf dem Telefon auf:
+
+| | Debug | Release |
+|---|---|---|
+| `INTERNET`-Berechtigung | von `flutter create` gesetzt | **nur wenn** `app/android/app/src/main/AndroidManifest.xml` sie enthält |
+| Reines HTTP | geht | **geht nicht** — geprüft, direkt hintereinander gegen dasselbe Gateway |
+
+Ohne die Berechtigung schlägt jeder Aufruf fehl und sieht aus wie „Gateway
+nicht erreichbar". Deshalb ist dieses eine Manifest eingecheckt, während der
+Rest von `android/` generiert bleibt — es überlebt ein erneutes
+`flutter create`.
+
+Für das Telefon heißt der zweite Punkt: `tailscale serve --bg 8765` ist
+Pflicht, nicht Kür. Die Adresse aus `tailscale serve status` gehört in die
+Einstellungen.
+
+```powershell
+flutter build apk --release
+# Manifest gegenprüfen, bevor die APK auf ein Gerät geht:
+Select-String -Path buildpp\intermediates\merged_manifestselease\*\AndroidManifest.xml -Pattern "permission.INTERNET"
+```
+
 ### Agentenschleife
 
 Nicht automatisiert, weil sie ein echtes Modell mit `tools`-Fähigkeit braucht.
