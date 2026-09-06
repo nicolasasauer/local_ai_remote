@@ -21,6 +21,7 @@ class ChatSession {
     this.entry,
     this.notice,
     this.loading = true,
+    this.pendingCalls = const [],
   });
 
   final Chat chat;
@@ -35,9 +36,15 @@ class ChatSession {
   /// Kurzer Hinweis für eine Snackbar (Verdichtung gelaufen, Warnung o.ä.).
   final String? notice;
 
+  /// Werkzeugaufrufe, die auf eine Freigabe warten. Solange hier etwas steht,
+  /// läuft nichts — das Gateway führt erst auf ausdrückliche Anforderung aus.
+  final List<ToolCall> pendingCalls;
+
   final bool loading;
 
   bool get canSend => chat.model != null && !send.phase.isActive;
+
+  bool get wartetAufFreigabe => pendingCalls.isNotEmpty;
 
   ChatSession copyWith({
     Chat? chat,
@@ -49,6 +56,7 @@ class ChatSession {
     String? notice,
     bool clearNotice = false,
     bool? loading,
+    List<ToolCall>? pendingCalls,
   }) =>
       ChatSession(
         chat: chat ?? this.chat,
@@ -58,6 +66,7 @@ class ChatSession {
         entry: clearEntry ? null : (entry ?? this.entry),
         notice: clearNotice ? null : (notice ?? this.notice),
         loading: loading ?? this.loading,
+        pendingCalls: pendingCalls ?? this.pendingCalls,
       );
 }
 
@@ -258,6 +267,7 @@ class ChatController extends StateNotifier<ChatSession> {
       status: MessageStatus.streaming,
       createdAt: DateTime.now(),
       requestId: _uuid.v4(),
+      requestedModel: ref.id,
     );
     await _store.insertMessage(assistant);
 
@@ -289,7 +299,11 @@ class ChatController extends StateNotifier<ChatSession> {
     _startWatchdog();
 
     _subscription = _client
-        .streamChat(ref: ref, messages: payload)
+        .streamChat(
+          ref: ref,
+          messages: payload,
+          research: state.chat.researchEnabled,
+        )
         .listen(_onEvent, onError: (Object e) => _fail('$e'), onDone: _onDone);
   }
 
@@ -341,6 +355,8 @@ class ChatController extends StateNotifier<ChatSession> {
           ),
         );
         _updateStreamingMessage();
+      case ChatToolCalls(:final calls):
+        _fragenObFreigegeben(calls);
       case ChatDone(:final metrics):
         _finish(metrics);
       case ChatFailure(:final message):
@@ -463,6 +479,113 @@ class ChatController extends StateNotifier<ChatSession> {
     _streamingId = null;
   }
 
+  /// Das Modell hat Werkzeuge vorgeschlagen. Der Lauf endet hier; weiter geht
+  /// es erst, wenn der Nutzer entschieden hat.
+  Future<void> _fragenObFreigegeben(List<ToolCall> calls) async {
+    if (_settled) return;
+    _settled = true;
+    _stopTimers();
+
+    final id = _streamingId;
+    if (id != null) {
+      await _store.finishMessage(
+        id,
+        content: _streamed,
+        status: MessageStatus.complete,
+        reasoning: _reasoned,
+        toolCalls: calls,
+      );
+    }
+    _streamingId = null;
+
+    if (!mounted) return;
+    state = state.copyWith(
+      messages: await _store.messages(state.chat.id),
+      pendingCalls: calls,
+      send: state.send.copyWith(
+        phase: SendPhase.awaitingApproval,
+        endedAt: DateTime.now(),
+      ),
+    );
+  }
+
+  /// Freigeben: ausführen lassen, Ergebnis in den Verlauf, weiter im Gespräch.
+  Future<void> approveResearch() async {
+    final offen = state.pendingCalls;
+    final ref = state.chat.model;
+    if (offen.isEmpty || ref == null) return;
+
+    state = state.copyWith(
+      pendingCalls: const [],
+      send: state.send.copyWith(
+        phase: SendPhase.processingPrompt,
+        note: 'Recherche läuft',
+        startedAt: DateTime.now(),
+        lastEventAt: DateTime.now(),
+      ),
+    );
+
+    for (final call in offen) {
+      String inhalt;
+      List<Quelle> quellen = const [];
+      try {
+        final ergebnis = await _client.runResearch(call);
+        inhalt = ergebnis.inhalt;
+        quellen = ergebnis.quellen;
+        if (ergebnis.gekuerzt) {
+          inhalt = '$inhalt\n\n[Gekürzt — die Seite war länger.]';
+        }
+      } on GatewayException catch (e) {
+        // Ein gescheiterter Abruf ist eine Information, kein stiller Ausfall:
+        // das Modell soll wissen, dass und warum es nichts bekommen hat.
+        inhalt = 'Fehlgeschlagen: ${e.message}';
+      }
+      await _store.insertMessage(ChatMessage(
+        id: _uuid.v4(),
+        chatId: state.chat.id,
+        role: MessageRole.tool,
+        content: inhalt,
+        status: MessageStatus.complete,
+        createdAt: DateTime.now(),
+        toolCallId: call.id,
+        toolName: call.name,
+        quellen: quellen,
+      ));
+    }
+
+    await _startRun(ref);
+  }
+
+  /// Ablehnen: die Absage geht als Ergebnis zurück, damit das Modell ohne die
+  /// Recherche weiterantwortet statt es erneut zu versuchen.
+  Future<void> rejectResearch() async {
+    final offen = state.pendingCalls;
+    final ref = state.chat.model;
+    if (offen.isEmpty || ref == null) return;
+
+    state = state.copyWith(pendingCalls: const []);
+    for (final call in offen) {
+      await _store.insertMessage(ChatMessage(
+        id: _uuid.v4(),
+        chatId: state.chat.id,
+        role: MessageRole.tool,
+        content: 'Vom Nutzer abgelehnt. Antworte ohne diese Information.',
+        status: MessageStatus.complete,
+        createdAt: DateTime.now(),
+        toolCallId: call.id,
+        toolName: call.name,
+      ));
+    }
+    await _startRun(ref);
+  }
+
+  Future<void> setResearch(bool enabled) async {
+    final chat = state.chat
+        .copyWith(researchEnabled: enabled, updatedAt: DateTime.now());
+    await _store.upsertChat(chat);
+    state = state.copyWith(chat: chat);
+  }
+
   Future<void> cancel() async {
     if (_settled) return;
     _settled = true;
@@ -574,7 +697,21 @@ class ChatController extends StateNotifier<ChatSession> {
           message.status == MessageStatus.interrupted) {
         continue;
       }
-      if (message.role == MessageRole.assistant && message.content.isEmpty) {
+      // Eine Assistant-Nachricht ohne Text, aber mit Werkzeugaufrufen, ist
+      // nicht leer — sie ist der halbe Zug, auf den sich das Ergebnis bezieht.
+      if (message.role == MessageRole.assistant &&
+          message.content.isEmpty &&
+          !message.hasToolCalls) {
+        continue;
+      }
+
+      if (message.role == MessageRole.tool) {
+        payload.add({
+          'role': 'tool',
+          'content': message.content,
+          if (message.toolCallId != null) 'tool_call_id': message.toolCallId,
+          if (message.toolName != null) 'tool_name': message.toolName,
+        });
         continue;
       }
 
@@ -602,6 +739,11 @@ class ChatController extends StateNotifier<ChatSession> {
         'role': message.role.sendAs,
         'content': buffer.toString(),
         if (images.isNotEmpty) 'images': images,
+        if (message.hasToolCalls)
+          'tool_calls': [
+            for (final c in message.toolCalls)
+              {'id': c.id, 'name': c.name, 'arguments': c.arguments}
+          ],
       });
     }
     return payload;

@@ -27,7 +27,7 @@ class ChatStore {
     final db = await databaseFactory.openDatabase(
       location,
       options: OpenDatabaseOptions(
-        version: 2,
+        version: 3,
         onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
         onCreate: _createSchema,
         onUpgrade: _upgradeSchema,
@@ -48,7 +48,8 @@ class ChatStore {
         backend TEXT,
         model TEXT,
         compression_enabled INTEGER NOT NULL DEFAULT 0,
-        system_prompt TEXT
+        system_prompt TEXT,
+        research_enabled INTEGER NOT NULL DEFAULT 0
       )''');
 
     await db.execute('''
@@ -64,7 +65,12 @@ class ChatStore {
         include_in_context INTEGER NOT NULL DEFAULT 1,
         summary_of TEXT,
         metrics TEXT,
-        reasoning TEXT
+        reasoning TEXT,
+        tool_calls TEXT,
+        tool_call_id TEXT,
+        tool_name TEXT,
+        quellen TEXT,
+        requested_model TEXT
       )''');
 
     await db.execute(
@@ -104,6 +110,21 @@ class ChatStore {
   static Future<void> _upgradeSchema(Database db, int from, int to) async {
     if (from < 2) {
       await db.execute('ALTER TABLE messages ADD COLUMN reasoning TEXT');
+    }
+    if (from < 3) {
+      // Recherche kam mit v3 dazu: Werkzeugaufrufe, ihre Ergebnisse und die
+      // Quellen, auf denen eine Antwort beruht.
+      for (final spalte in [
+        'tool_calls TEXT',
+        'tool_call_id TEXT',
+        'tool_name TEXT',
+        'quellen TEXT',
+        'requested_model TEXT',
+      ]) {
+        await db.execute('ALTER TABLE messages ADD COLUMN $spalte');
+      }
+      await db.execute(
+          'ALTER TABLE chats ADD COLUMN research_enabled INTEGER NOT NULL DEFAULT 0');
     }
   }
 
@@ -231,6 +252,7 @@ class ChatStore {
     String? metricsJson,
     String? error,
     String? reasoning,
+    List<ToolCall>? toolCalls,
   }) =>
       _db.update(
         'messages',
@@ -240,6 +262,8 @@ class ChatStore {
           'metrics': metricsJson,
           'error': error,
           if (reasoning != null) 'reasoning': reasoning,
+          if (toolCalls != null && toolCalls.isNotEmpty)
+            'tool_calls': ToolCall.encode(toolCalls),
         },
         where: 'id = ?',
         whereArgs: [messageId],

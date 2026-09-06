@@ -15,7 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gateway import main as gw
-from gateway import openai_api
+from gateway import openai_api, research
 from gateway.backends.base import (
     Backend,
     Delta,
@@ -112,11 +112,14 @@ def backends():
 @pytest.fixture
 def client(backends, monkeypatch):
     # Config ist frozen, also die ganze Instanz ersetzen statt eines Feldes.
-    # agent_token bewusst leer: sonst entscheidet eine lokale .env darueber,
-    # ob die Agenten-Oberflaeche im Test existiert.
-    cfg = dataclasses.replace(gw.CONFIG, token=TOKEN, agent_token="")
+    # agent_token und Recherche bewusst aus: sonst entscheidet eine lokale
+    # .env darueber, was der Test vorfindet.
+    cfg = dataclasses.replace(
+        gw.CONFIG, token=TOKEN, agent_token="", research_enabled=False
+    )
     monkeypatch.setattr(gw, "CONFIG", cfg)
     monkeypatch.setattr(openai_api, "CONFIG", cfg)
+    monkeypatch.setattr(research, "CONFIG", cfg)
     with TestClient(gw.app) as c:
         # Nach dem startup-Hook setzen, sonst ueberschreiben ihn die echten
         # Adapter wieder.
@@ -284,10 +287,13 @@ AGENT_TOKEN = "agent-token-mit-genug-laenge"
 
 @pytest.fixture
 def agent_client(backends, monkeypatch):
-    cfg = dataclasses.replace(gw.CONFIG, token=TOKEN, agent_token=AGENT_TOKEN)
-    # Beide Module halten eine eigene Referenz auf CONFIG.
+    cfg = dataclasses.replace(
+        gw.CONFIG, token=TOKEN, agent_token=AGENT_TOKEN, research_enabled=False
+    )
+    # Jedes Modul haelt eine eigene Referenz auf CONFIG.
     monkeypatch.setattr(gw, "CONFIG", cfg)
     monkeypatch.setattr(openai_api, "CONFIG", cfg)
+    monkeypatch.setattr(research, "CONFIG", cfg)
     with TestClient(gw.app) as c:
         gw.app.state.backends = backends
         yield c

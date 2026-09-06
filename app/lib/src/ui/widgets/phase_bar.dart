@@ -41,7 +41,7 @@ class _PhaseBarState extends State<PhaseBar> {
     // Die verstrichene Zeit muss laufen, auch wenn keine Events kommen —
     // gerade dann ist sie die einzige Information, die man hat.
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted && widget.send.phase.isActive) setState(() {});
+      if (mounted && widget.send.phase.isRunning) setState(() {});
     });
   }
 
@@ -79,7 +79,7 @@ class _PhaseBarState extends State<PhaseBar> {
         children: [
           Row(
             children: [
-              _StatusDot(color: accent, pulsing: send.phase.isActive && !stalled),
+              _StatusDot(color: accent, pulsing: send.phase.isRunning && !stalled),
               const SizedBox(width: 9),
               Expanded(
                 child: Text(
@@ -96,7 +96,7 @@ class _PhaseBarState extends State<PhaseBar> {
                   formatDuration(send.elapsed),
                   style: kMono.copyWith(fontSize: 12, color: Tone.muted),
                 ),
-              if (send.phase.isActive)
+              if (send.phase.isRunning)
                 IconButton(
                   tooltip: 'Abbrechen',
                   icon: const Icon(Icons.stop_circle_outlined, size: 19),
@@ -109,7 +109,7 @@ class _PhaseBarState extends State<PhaseBar> {
                 ),
             ],
           ),
-          if (send.phase.isActive) ...[
+          if (send.phase.isRunning) ...[
             const SizedBox(height: 8),
             _Stages(current: send.phase, accent: accent),
           ],

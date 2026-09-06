@@ -50,6 +50,12 @@ class ChatHeartbeat extends ChatEvent {
   const ChatHeartbeat();
 }
 
+/// Das Modell möchte Werkzeuge aufrufen. Ausgeführt wird erst nach Freigabe.
+class ChatToolCalls extends ChatEvent {
+  const ChatToolCalls(this.calls);
+  final List<ToolCall> calls;
+}
+
 class ChatDone extends ChatEvent {
   const ChatDone(this.metrics);
   final ChatMetrics? metrics;
@@ -58,6 +64,19 @@ class ChatDone extends ChatEvent {
 class ChatFailure extends ChatEvent {
   const ChatFailure(this.message);
   final String message;
+}
+
+/// Ergebnis eines ausgeführten Recherche-Aufrufs.
+class ResearchResult {
+  const ResearchResult({
+    required this.inhalt,
+    required this.quellen,
+    this.gekuerzt = false,
+  });
+
+  final String inhalt;
+  final List<Quelle> quellen;
+  final bool gekuerzt;
 }
 
 class GatewayClient {
@@ -134,12 +153,13 @@ class GatewayClient {
     required ModelRef ref,
     required List<Map<String, dynamic>> messages,
     double? temperature,
+    bool research = false,
   }) async* {
     // Das Abbestellen des Streams schliesst die Verbindung mit; das Gateway
     // sieht den Disconnect und bricht die Generierung auf dem Desktop ab.
     // `gateway_client_test.dart` haelt genau das fest — daran haengt, ob
     // "Abbrechen" wirklich Rechenzeit freigibt.
-    yield* _streamChat(_http, ref, messages, temperature);
+    yield* _streamChat(_http, ref, messages, temperature, research);
   }
 
   Stream<ChatEvent> _streamChat(
@@ -147,6 +167,7 @@ class GatewayClient {
     ModelRef ref,
     List<Map<String, dynamic>> messages,
     double? temperature,
+    bool research,
   ) async* {
     final request = http.Request('POST', _uri('/v1/chat'))
       ..headers.addAll({
@@ -159,6 +180,7 @@ class GatewayClient {
         'model': ref.id,
         'messages': messages,
         if (temperature != null) 'temperature': temperature,
+        if (research) 'research': true,
       });
 
     final http.StreamedResponse response;
@@ -199,6 +221,13 @@ class GatewayClient {
             yield ChatDelta((event['text'] as String?) ?? '');
           case 'reasoning':
             yield ChatReasoning((event['text'] as String?) ?? '');
+          case 'tool_calls':
+            final roh = event['calls'];
+            yield ChatToolCalls([
+              if (roh is List)
+                for (final c in roh)
+                  if (c is Map<String, dynamic>) ToolCall.fromJson(c)
+            ]);
           case 'status':
             yield ChatPhaseEvent(
                 (event['state'] as String?) ?? '', event['note'] as String?);
@@ -236,6 +265,33 @@ class GatewayClient {
       if (event is ChatFailure) throw GatewayException(event.message);
     }
     return buffer.toString().trim();
+  }
+
+  /// Führt einen **freigegebenen** Recherche-Aufruf aus.
+  ///
+  /// Bewusst ein eigener Aufruf und kein Schritt im Chat-Stream: zwischen dem
+  /// Vorschlag des Modells und der Ausführung liegt so zwingend eine
+  /// Entscheidung des Nutzers.
+  Future<ResearchResult> runResearch(ToolCall call) async {
+    final res = await _http
+        .post(_uri('/v1/research'),
+            headers: {..._headers, 'Content-Type': 'application/json'},
+            body: jsonEncode({'name': call.name, 'arguments': call.arguments}))
+        .timeout(const Duration(seconds: 60));
+    _ensureOk(res);
+    final j = jsonDecode(res.body) as Map<String, dynamic>;
+    return ResearchResult(
+      inhalt: (j['inhalt'] as String?) ?? '',
+      quellen: [
+        for (final q in (j['quellen'] as List<dynamic>? ?? const []))
+          if (q is Map<String, dynamic>)
+            Quelle(
+              titel: (q['titel'] as String?) ?? (q['url'] as String?) ?? '',
+              url: (q['url'] as String?) ?? '',
+            )
+      ],
+      gekuerzt: (j['gekuerzt'] as bool?) ?? false,
+    );
   }
 
   Uri telemetryUri() {

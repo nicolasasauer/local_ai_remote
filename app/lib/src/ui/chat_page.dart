@@ -89,6 +89,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
             onSelected: (value) => _menu(value, session),
             itemBuilder: (context) => [
               CheckedPopupMenuItem(
+                value: 'research',
+                checked: session.chat.researchEnabled,
+                child: const Text('Im Web nachsehen dürfen'),
+              ),
+              CheckedPopupMenuItem(
                 value: 'compress',
                 checked: session.chat.compressionEnabled,
                 child: const Text('Kontext verdichten'),
@@ -122,6 +127,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                     },
                   ),
           ),
+          if (session.wartetAufFreigabe)
+            _Freigabe(
+              calls: session.pendingCalls,
+              onApprove: _controller.approveResearch,
+              onReject: _controller.rejectResearch,
+            ),
           PhaseBar(
             send: session.send,
             onCancel: _controller.cancel,
@@ -218,6 +229,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   Future<void> _menu(String value, ChatSession session) async {
     switch (value) {
+      case 'research':
+        await _controller.setResearch(!session.chat.researchEnabled);
       case 'compress':
         await _controller.setCompression(!session.chat.compressionEnabled);
       case 'rename':
@@ -507,6 +520,86 @@ class _EmptyChat extends StatelessWidget {
           textAlign: TextAlign.center,
           style: TextStyle(fontSize: 13, color: Tone.faint, height: 1.5),
         ),
+      ),
+    );
+  }
+}
+
+
+/// Freigabe für Recherche-Aufrufe.
+///
+/// Bis hier etwas angetippt wird, passiert nichts: das Gateway führt erst auf
+/// ausdrückliche Anforderung aus. Deshalb steht hier auch, *was* genau
+/// vorgeschlagen wurde — eine Zusage ohne Gegenstand wäre keine.
+class _Freigabe extends StatelessWidget {
+  const _Freigabe({
+    required this.calls,
+    required this.onApprove,
+    required this.onReject,
+  });
+
+  final List<ToolCall> calls;
+  final VoidCallback onApprove;
+  final VoidCallback onReject;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(14, 4, 14, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: Tone.amber.withValues(alpha: 0.5)),
+        borderRadius: BorderRadius.circular(10),
+        color: Tone.surface,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.travel_explore, size: 15, color: Tone.amber),
+              const SizedBox(width: 6),
+              Text(
+                calls.length == 1
+                    ? 'Das Modell möchte nachsehen'
+                    : 'Das Modell möchte ${calls.length}-mal nachsehen',
+                style: const TextStyle(
+                  fontSize: 12.5,
+                  color: Tone.amber,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          for (final call in calls)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                call.beschreibung,
+                style: const TextStyle(fontSize: 13, color: Tone.ink),
+              ),
+            ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              FilledButton(
+                onPressed: onApprove,
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size(0, 34),
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                ),
+                child: const Text('Freigeben'),
+              ),
+              const SizedBox(width: 8),
+              TextButton(
+                onPressed: onReject,
+                style: TextButton.styleFrom(minimumSize: const Size(0, 34)),
+                child: const Text('Ablehnen'),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

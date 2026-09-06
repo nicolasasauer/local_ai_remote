@@ -10,7 +10,10 @@ enum MessageRole {
 
   /// Zusammenfassung älterer Nachrichten. Wird als System-Rolle gesendet,
   /// bleibt im UI aber unterscheidbar.
-  summary('summary');
+  summary('summary'),
+
+  /// Ergebnis eines freigegebenen Recherche-Aufrufs.
+  tool('tool');
 
   const MessageRole(this.wire);
   final String wire;
@@ -37,6 +40,96 @@ enum MessageStatus {
   static MessageStatus parse(String raw) =>
       MessageStatus.values.firstWhere((s) => s.wire == raw,
           orElse: () => MessageStatus.complete);
+}
+
+/// Ein Werkzeugaufruf, den das Modell vorgeschlagen hat.
+///
+/// Ausgeführt wird er erst nach Freigabe, und zwar im Gateway — nicht hier.
+/// Die Argumente sind Modellausgabe: sie werden angezeigt, damit der Nutzer
+/// weiß, wozu er sein Ja gibt.
+class ToolCall {
+  const ToolCall({
+    required this.id,
+    required this.name,
+    required this.arguments,
+  });
+
+  final String id;
+  final String name;
+
+  /// JSON-String, unverändert vom Modell.
+  final String arguments;
+
+  /// Was der Aufruf konkret vorhat, in einem Satz für die Freigabe.
+  String get beschreibung {
+    final werte = _werte;
+    return switch (name) {
+      'web_search' => 'Im Web suchen nach "${werte['query'] ?? '?'}"',
+      'fetch_url' => 'Die Seite ${werte['url'] ?? '?'} abrufen',
+      _ => '$name aufrufen',
+    };
+  }
+
+  Map<String, dynamic> get _werte {
+    try {
+      final roh = jsonDecode(arguments);
+      return roh is Map<String, dynamic> ? roh : const {};
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  Map<String, dynamic> toJson() =>
+      {'id': id, 'name': name, 'arguments': arguments};
+
+  static ToolCall fromJson(Map<String, dynamic> j) => ToolCall(
+        id: (j['id'] as String?) ?? '',
+        name: (j['name'] as String?) ?? '',
+        arguments: (j['arguments'] as String?) ?? '{}',
+      );
+
+  static String encode(List<ToolCall> calls) =>
+      jsonEncode(calls.map((c) => c.toJson()).toList());
+
+  static List<ToolCall> decode(String? source) {
+    if (source == null || source.isEmpty) return const [];
+    try {
+      return (jsonDecode(source) as List<dynamic>)
+          .map((e) => ToolCall.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+}
+
+/// Eine Quelle, auf die sich eine Antwort stützt.
+class Quelle {
+  const Quelle({required this.titel, required this.url});
+
+  final String titel;
+  final String url;
+
+  Map<String, dynamic> toJson() => {'titel': titel, 'url': url};
+
+  static Quelle fromJson(Map<String, dynamic> j) => Quelle(
+        titel: (j['titel'] as String?) ?? (j['url'] as String?) ?? '',
+        url: (j['url'] as String?) ?? '',
+      );
+
+  static String encode(List<Quelle> q) =>
+      jsonEncode(q.map((e) => e.toJson()).toList());
+
+  static List<Quelle> decode(String? source) {
+    if (source == null || source.isEmpty) return const [];
+    try {
+      return (jsonDecode(source) as List<dynamic>)
+          .map((e) => Quelle.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
 }
 
 enum AttachmentKind { image, pdf, text }
@@ -139,6 +232,11 @@ class ChatMessage {
     this.metrics,
     this.attachments = const [],
     this.reasoning,
+    this.toolCalls = const [],
+    this.toolCallId,
+    this.toolName,
+    this.quellen = const [],
+    this.requestedModel,
   });
 
   final String id;
@@ -170,6 +268,23 @@ class ChatMessage {
 
   bool get hasReasoning => (reasoning ?? '').isNotEmpty;
 
+  /// Bei `assistant`: was das Modell aufrufen möchte.
+  final List<ToolCall> toolCalls;
+
+  /// Bei `tool`: auf welchen Aufruf sich das Ergebnis bezieht.
+  final String? toolCallId;
+  final String? toolName;
+
+  /// Bei `tool`: worauf das Ergebnis beruht, für die Anzeige im Chat.
+  final List<Quelle> quellen;
+
+  bool get hasToolCalls => toolCalls.isNotEmpty;
+
+  /// Das Modell, das für **diese** Antwort angefragt wurde. Ein späterer
+  /// Modellwechsel im Chat darf alte Nachrichten nicht rückwirkend als
+  /// "falsches Modell" erscheinen lassen.
+  final String? requestedModel;
+
   bool get isRunning => status == MessageStatus.streaming;
   bool get isSummary => role == MessageRole.summary;
 
@@ -181,6 +296,8 @@ class ChatMessage {
     ChatMetrics? metrics,
     List<Attachment>? attachments,
     String? reasoning,
+    List<ToolCall>? toolCalls,
+    List<Quelle>? quellen,
   }) =>
       ChatMessage(
         id: id,
@@ -196,6 +313,11 @@ class ChatMessage {
         metrics: metrics ?? this.metrics,
         attachments: attachments ?? this.attachments,
         reasoning: reasoning ?? this.reasoning,
+        toolCalls: toolCalls ?? this.toolCalls,
+        toolCallId: toolCallId,
+        toolName: toolName,
+        quellen: quellen ?? this.quellen,
+        requestedModel: requestedModel,
       );
 
   Map<String, Object?> toRow() => {
@@ -211,6 +333,11 @@ class ChatMessage {
         'summary_of': summaryOf.isEmpty ? null : jsonEncode(summaryOf),
         'metrics': metrics?.encode(),
         'reasoning': reasoning,
+        'tool_calls': toolCalls.isEmpty ? null : ToolCall.encode(toolCalls),
+        'tool_call_id': toolCallId,
+        'tool_name': toolName,
+        'quellen': quellen.isEmpty ? null : Quelle.encode(quellen),
+        'requested_model': requestedModel,
       };
 
   static ChatMessage fromRow(
@@ -236,6 +363,11 @@ class ChatMessage {
         metrics: ChatMetrics.decode(r['metrics'] as String?),
         attachments: attachments,
         reasoning: r['reasoning'] as String?,
+        toolCalls: ToolCall.decode(r['tool_calls'] as String?),
+        toolCallId: r['tool_call_id'] as String?,
+        toolName: r['tool_name'] as String?,
+        quellen: Quelle.decode(r['quellen'] as String?),
+        requestedModel: r['requested_model'] as String?,
       );
 }
 
@@ -248,6 +380,7 @@ class Chat {
     this.model,
     this.compressionEnabled = false,
     this.systemPrompt,
+    this.researchEnabled = false,
   });
 
   final String id;
@@ -264,6 +397,10 @@ class Chat {
 
   final String? systemPrompt;
 
+  /// Ob das Modell in diesem Chat im Web nachsehen darf. Standardmäßig aus —
+  /// jeder einzelne Aufruf braucht darüber hinaus eine Freigabe.
+  final bool researchEnabled;
+
   /// Gleichheit nur über die id: der Chat dient als Schlüssel einer
   /// Provider-Family, und ein Umbenennen mitten im Stream darf den laufenden
   /// Controller nicht ersetzen.
@@ -278,6 +415,7 @@ class Chat {
     ModelRef? model,
     bool? compressionEnabled,
     String? systemPrompt,
+    bool? researchEnabled,
     DateTime? updatedAt,
   }) =>
       Chat(
@@ -288,6 +426,7 @@ class Chat {
         model: model ?? this.model,
         compressionEnabled: compressionEnabled ?? this.compressionEnabled,
         systemPrompt: systemPrompt ?? this.systemPrompt,
+        researchEnabled: researchEnabled ?? this.researchEnabled,
       );
 
   Map<String, Object?> toRow() => {
@@ -299,6 +438,7 @@ class Chat {
         'model': model?.id,
         'compression_enabled': compressionEnabled ? 1 : 0,
         'system_prompt': systemPrompt,
+        'research_enabled': researchEnabled ? 1 : 0,
       };
 
   static Chat fromRow(Map<String, Object?> r) {
@@ -316,6 +456,7 @@ class Chat {
           : null,
       compressionEnabled: ((r['compression_enabled'] as int?) ?? 0) == 1,
       systemPrompt: r['system_prompt'] as String?,
+      researchEnabled: ((r['research_enabled'] as int?) ?? 0) == 1,
     );
   }
 }
@@ -330,6 +471,10 @@ enum SendPhase {
   loadingModel('Modell wird in den Speicher geladen'),
   processingPrompt('Prompt wird verarbeitet'),
   generating('Antwortet'),
+
+  /// Das Modell hat einen Werkzeugaufruf vorgeschlagen und wartet auf die
+  /// Freigabe. Nichts läuft, bis der Nutzer entschieden hat.
+  awaitingApproval('Wartet auf Freigabe'),
   stalled('Keine Rückmeldung'),
   done('Fertig'),
   failed('Fehlgeschlagen'),
@@ -346,7 +491,12 @@ enum SendPhase {
         SendPhase.processingPrompt,
         SendPhase.generating,
         SendPhase.stalled,
+        SendPhase.awaitingApproval,
       }.contains(this);
+
+  /// Ob gerade tatsächlich gerechnet wird. `awaitingApproval` ist ein Halt,
+  /// kein Lauf — der Abbrechen-Knopf gehört dort nicht hin.
+  bool get isRunning => isActive && this != SendPhase.awaitingApproval;
 }
 
 class SendState {

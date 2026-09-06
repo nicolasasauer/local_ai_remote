@@ -131,4 +131,44 @@ void main() {
       expect(find.text('erst denken'), findsOneWidget);
     });
   });
+
+  group('Markdown', () {
+    testWidgets('Auszeichnungen stehen nicht mehr woertlich da', (tester) async {
+      // Modelle schreiben Markdown. Ohne Aufbereitung liest man `**` im Chat.
+      await zeige(tester, antwort(content: 'Die Hauptstadt ist **Rom**.'));
+
+      expect(find.textContaining('**'), findsNothing);
+      // Der Text selbst bleibt vollständig lesbar.
+      expect(find.textContaining('Rom'), findsWidgets);
+    });
+
+    testWidgets('halbfertige Syntax kippt die Anzeige nicht', (tester) async {
+      // Während des Streams ist der Text zwangsläufig unvollständig.
+      await zeige(tester, antwort(content: 'Ein **halb offener'));
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('Modellabweichung nach Modellwechsel', () {
+    testWidgets('vergleicht gegen das angefragte Modell', (tester) async {
+      // Ein späterer Wechsel im Chat darf alte Antworten nicht rückwirkend
+      // als "falsches Modell" markieren.
+      final m = ChatMessage(
+        id: 'm1',
+        chatId: 'c1',
+        role: MessageRole.assistant,
+        content: 'Antwort',
+        status: MessageStatus.complete,
+        createdAt: DateTime(2026, 1, 1),
+        requestedModel: 'llama3.2:1b',
+        metrics: ChatMetrics.decode(jsonEncode({
+          'served_model': {'value': 'llama3.2:1b', 'certainty': 'known', 'note': null}
+        })),
+      );
+
+      await zeige(tester, m, expectedModel: 'qwen3.6-35b');
+
+      expect(find.textContaining('Geantwortet hat'), findsNothing);
+    });
+  });
 }

@@ -129,4 +129,65 @@ void main() {
       expect(m.hasReasoning, isTrue);
     });
   });
+
+  group('Recherche', () {
+    test('Werkzeugaufruf und Ergebnis ueberleben den Verlauf', () async {
+      await store.upsertChat(newChat());
+      await store.insertMessage(ChatMessage(
+        id: 'a1',
+        chatId: 'c1',
+        role: MessageRole.assistant,
+        content: '',
+        status: MessageStatus.complete,
+        createdAt: DateTime(2026, 1, 1),
+        toolCalls: const [
+          ToolCall(id: 'call_1', name: 'web_search',
+              arguments: '{"query": "Wetter Berlin"}'),
+        ],
+      ));
+      await store.insertMessage(ChatMessage(
+        id: 't1',
+        chatId: 'c1',
+        role: MessageRole.tool,
+        content: '12 Grad',
+        status: MessageStatus.complete,
+        createdAt: DateTime(2026, 1, 2),
+        toolCallId: 'call_1',
+        toolName: 'web_search',
+        quellen: const [Quelle(titel: 'Wetterdienst', url: 'https://example.com')],
+      ));
+
+      final messages = await store.messages('c1');
+      expect(messages.first.toolCalls.single.name, 'web_search');
+      expect(messages.first.hasToolCalls, isTrue);
+      expect(messages.last.role, MessageRole.tool);
+      expect(messages.last.toolCallId, 'call_1');
+      expect(messages.last.quellen.single.url, 'https://example.com');
+    });
+
+    test('Recherche ist pro Chat abschaltbar und bleibt aus', () async {
+      await store.upsertChat(newChat());
+      expect((await store.chat('c1'))!.researchEnabled, isFalse,
+          reason: 'aus, solange niemand sie einschaltet');
+
+      await store.upsertChat(newChat().copyWith(researchEnabled: true));
+      expect((await store.chat('c1'))!.researchEnabled, isTrue);
+    });
+
+    test('Beschreibung eines Aufrufs nennt den Gegenstand', () {
+      // Ohne das waere die Freigabe eine Zusage ohne Gegenstand.
+      const suche = ToolCall(
+          id: 'x', name: 'web_search', arguments: '{"query": "Kaffeepreise"}');
+      expect(suche.beschreibung, contains('Kaffeepreise'));
+
+      const abruf = ToolCall(
+          id: 'y', name: 'fetch_url', arguments: '{"url": "https://example.com"}');
+      expect(abruf.beschreibung, contains('example.com'));
+    });
+
+    test('Kaputte Argumente kippen die Beschreibung nicht', () {
+      const kaputt = ToolCall(id: 'z', name: 'web_search', arguments: '{nicht json');
+      expect(kaputt.beschreibung, isNotEmpty);
+    });
+  });
 }

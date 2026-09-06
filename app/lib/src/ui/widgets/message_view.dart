@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:gpt_markdown/gpt_markdown.dart';
 
 import '../../models/chat.dart';
 import '../../theme.dart';
@@ -28,6 +29,9 @@ class MessageView extends StatelessWidget {
   Widget build(BuildContext context) {
     if (message.isSummary) {
       return _SummaryMarker(message: message, onUndo: onUndoSummary);
+    }
+    if (message.role == MessageRole.tool) {
+      return _Werkzeugergebnis(message: message);
     }
 
     final isUser = message.role == MessageRole.user;
@@ -70,14 +74,7 @@ class MessageView extends StatelessWidget {
                         running: message.isRunning,
                       ),
                     if (message.content.isNotEmpty)
-                      SelectableText(
-                        message.content,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          height: 1.5,
-                          color: Tone.ink,
-                        ),
-                      ),
+                      _Antworttext(text: message.content),
                     if (message.isRunning &&
                         message.content.isEmpty &&
                         !message.hasReasoning)
@@ -112,10 +109,14 @@ class MessageView extends StatelessWidget {
             ),
           if (message.metrics != null && !message.isRunning)
             _MetricsRow(metrics: message.metrics!),
-          if (!message.isRunning) _ModellAbweichung(
-            metrics: message.metrics,
-            expected: expectedModel,
-          ),
+          if (!message.isRunning)
+            _ModellAbweichung(
+              metrics: message.metrics,
+              // Das Modell dieser Antwort, nicht die aktuelle Wahl des Chats:
+              // ein späterer Wechsel darf alte Nachrichten nicht rückwirkend
+              // als "falsches Modell" markieren.
+              expected: message.requestedModel ?? expectedModel,
+            ),
         ],
       ),
     );
@@ -505,6 +506,148 @@ class _ModellAbweichung extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+
+/// Ergebnis eines freigegebenen Recherche-Aufrufs.
+///
+/// Eingeklappt, weil eine abgerufene Seite die Unterhaltung sonst zudeckt.
+/// Die Quellen stehen aber offen da: eine Antwort, die sich auf etwas stützt,
+/// soll zeigen, worauf.
+class _Werkzeugergebnis extends StatefulWidget {
+  const _Werkzeugergebnis({required this.message});
+
+  final ChatMessage message;
+
+  @override
+  State<_Werkzeugergebnis> createState() => _WerkzeugergebnisState();
+}
+
+class _WerkzeugergebnisState extends State<_Werkzeugergebnis> {
+  bool _offen = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final m = widget.message;
+    final gescheitert = m.content.startsWith('Fehlgeschlagen:') ||
+        m.content.startsWith('Vom Nutzer abgelehnt');
+    final farbe = gescheitert ? Tone.muted : Tone.teal;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 4, 14, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            onTap: () => setState(() => _offen = !_offen),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(
+                children: [
+                  Icon(
+                    gescheitert ? Icons.search_off : Icons.travel_explore,
+                    size: 14,
+                    color: farbe,
+                  ),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      _kopfzeile(m, gescheitert),
+                      style: TextStyle(fontSize: 11.5, color: farbe),
+                    ),
+                  ),
+                  Icon(
+                    _offen ? Icons.expand_less : Icons.expand_more,
+                    size: 15,
+                    color: Tone.faint,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          for (final q in m.quellen)
+            if (q.url.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(left: 20, top: 2),
+                child: Text(
+                  q.titel.isEmpty ? q.url : q.titel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11, color: Tone.faint),
+                ),
+              ),
+          if (_offen)
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.only(top: 6, left: 20),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: const BoxDecoration(
+                border: Border(left: BorderSide(color: Tone.hairline, width: 2)),
+              ),
+              child: SelectableText(
+                m.content,
+                style: const TextStyle(
+                  fontSize: 12,
+                  height: 1.45,
+                  color: Tone.muted,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  String _kopfzeile(ChatMessage m, bool gescheitert) {
+    if (gescheitert) return m.content.split('\n').first;
+    final anzahl = m.quellen.length;
+    return switch (m.toolName) {
+      'web_search' => 'Im Web gesucht — $anzahl Treffer',
+      'fetch_url' => 'Seite abgerufen',
+      _ => 'Werkzeug ausgeführt',
+    };
+  }
+}
+
+
+/// Nachrichtentext, als Markdown aufbereitet.
+///
+/// Modelle schreiben Markdown — ohne Aufbereitung stehen `**` und `#` wörtlich
+/// im Chat. Gerendert wird währenddessen auch der halbfertige Text: der Strom
+/// kommt zeichenweise, und ein Renderer, der an unvollständiger Syntax
+/// scheitert, würde bei jedem zweiten Token flackern.
+class _Antworttext extends StatelessWidget {
+  const _Antworttext({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return SelectionArea(
+      child: GptMarkdown(
+        text,
+        style: const TextStyle(fontSize: 14, height: 1.5, color: Tone.ink),
+        // Verweise werden angezeigt, aber nicht geöffnet: die Adresse stammt
+        // aus einer Modellausgabe, und ein Fingertipp soll nicht ungefragt
+        // einen Browser auf sie richten.
+        onLinkTap: null,
+        codeBuilder: (context, name, code, closed) => Container(
+          width: double.infinity,
+          margin: const EdgeInsets.symmetric(vertical: 6),
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Tone.base,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: Tone.hairline),
+          ),
+          child: SelectableText(
+            code.trimRight(),
+            style: kMono.copyWith(fontSize: 12.5, color: Tone.ink, height: 1.4),
+          ),
+        ),
       ),
     );
   }

@@ -72,6 +72,24 @@ dort `usesCleartextTraffic`. Im Release-Build braucht es die HTTPS-Adresse aus
 | 8 | Modell mitten im Chat wechseln | Verlauf bleibt vollständig, Kontext wird neu geschätzt (`~` kehrt zurück) |
 | 9 | Falscher Token in den Einstellungen | `401` mit lesbarer Meldung, keine leere Liste ohne Erklärung |
 
+### Recherche in der App
+
+Braucht ein Modell mit `tools`-Fähigkeit und `GATEWAY_RESEARCH=1`.
+
+| # | Schritt | Erwartung |
+|---|---|---|
+| 1 | „Im Web nachsehen dürfen" im Chat-Menü einschalten | bleibt pro Chat gesetzt |
+| 2 | Nach etwas fragen, das einen Abruf braucht | Freigabekarte nennt **den konkreten Gegenstand**, nicht nur „Werkzeug ausführen"; Phase steht auf „Wartet auf Freigabe", kein Stopp-Knopf |
+| 3 | Freigeben | „Seite abgerufen" mit sichtbarer Quelle, danach eine Antwort, die den Inhalt tatsächlich verwendet |
+| 4 | Ablehnen | das Modell antwortet ohne die Recherche, statt es erneut zu versuchen |
+| 5 | Abruf einer Tailnet-Adresse (`100.x`) erzwingen | `422` mit Begründung, kein Abruf |
+
+Schritt 5 lässt sich ohne App prüfen:
+
+```bash
+curl -s -X POST http://127.0.0.1:8765/v1/research   -H "Authorization: Bearer $GATEWAY_TOKEN" -H "Content-Type: application/json"   -d '{"name":"fetch_url","arguments":"{\"url\": \"http://100.101.102.103/\"}"}'
+```
+
 ### Agentenschleife
 
 Nicht automatisiert, weil sie ein echtes Modell mit `tools`-Fähigkeit braucht.
