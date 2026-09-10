@@ -80,7 +80,8 @@ In den Einstellungen dann die `tailscale serve`-URL und den Token eintragen.
 | Pfad | Inhalt |
 |---|---|
 | `gateway/backends/` | Adapter für Ollama und LM Studio |
-| `gateway/telemetry.py` | CPU/RAM per psutil, GPU per rocm-smi / amdgpu_top / nvidia-smi |
+| `gateway/telemetry.py` | CPU/RAM per psutil, GPU aus mehreren Quellen |
+| `gateway/windows_gpu.py` | GPU unter Windows ohne Fremdwerkzeug (PDH + DXGI) |
 | `app/lib/src/models/` | Datenmodelle inkl. `Fact` |
 | `app/lib/src/data/` | SQLite-Store, HTTP-Client, Token-Schätzung |
 | `app/lib/src/chat/` | Zustandsmaschine des Sendevorgangs, Kontextverdichtung |
@@ -152,7 +153,8 @@ und unter Windows. `flutter analyze` ist sauber, Tests siehe
 Offen:
 
 - das JSON-Schema von `amdgpu_top` variiert zwischen Versionen; einmal
-  `amdgpu_top --json --single` laufen lassen und `_probe_amdgpu_top()` abgleichen
+  `amdgpu_top --json --single` laufen lassen und `_probe_amdgpu_top()` abgleichen.
+  Unter Windows braucht es das nicht — dort greifen die Leistungsindikatoren
 - Entladen bei LM Studio geht nur über die CLI (`lms`), das Gateway meldet
   sonst `501` mit Begründung
 

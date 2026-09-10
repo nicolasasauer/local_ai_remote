@@ -17,7 +17,8 @@ from typing import Any, Callable
 
 import psutil
 
-from .schema import Fact, GpuSample, TelemetrySample
+from . import windows_gpu
+from .schema import Certainty, Fact, GpuSample, TelemetrySample
 
 _MIB = 1024 * 1024
 
@@ -197,10 +198,75 @@ def _probe_nvidia_smi() -> list[GpuSample]:
     return samples
 
 
+class _WindowsZaehlerProbe:
+    """Leistungsindikatoren von Windows.
+
+    Letzte in der Reihe, aber die erste, die auf einem Windows-Desktop ohne
+    Zusatzinstallation etwas liefert: rocm-smi, amdgpu_top und nvidia-smi
+    muessen erst eingerichtet werden. Die Abfrage bleibt zwischen den
+    Messungen offen - ein Prozessstart pro Sekunde waere teurer als die
+    Messung.
+    """
+
+    def __init__(self) -> None:
+        self._zaehler: windows_gpu.WindowsGpuZaehler | None = None
+
+    def __call__(self) -> list[GpuSample]:
+        if self._zaehler is None:
+            self._zaehler = windows_gpu.WindowsGpuZaehler()
+
+        adapter = windows_gpu.adapter_lesen()
+        if not adapter:
+            raise RuntimeError("DXGI nennt keine Grafikkarte")
+
+        auslastung = self._zaehler.auslastung()
+        speicher = self._zaehler.belegter_speicher()
+
+        proben: list[GpuSample] = []
+        for luid, karte in adapter.items():
+            # Adapter ohne jeden Messwert weglassen: eine zweite Karte, die
+            # nichts tut und nichts belegt, ist keine Information.
+            if luid not in auslastung and luid not in speicher:
+                continue
+            proben.append(
+                GpuSample(
+                    name=karte.name,
+                    vendor=karte.vendor,
+                    source="windows-counters",
+                    util_percent=Fact.maybe(
+                        round(auslastung[luid], 1) if luid in auslastung else None,
+                        "kein Engine-Zaehler fuer diesen Adapter",
+                    ),
+                    vram_used_bytes=Fact.maybe(
+                        speicher.get(luid),
+                        "kein Speicherzaehler fuer diesen Adapter",
+                    ),
+                    vram_total_bytes=Fact.maybe(
+                        karte.vram_total or None,
+                        "DXGI nennt keine Gesamtgroesse",
+                    ),
+                    temp_c=Fact[float].unsupported_because(
+                        "Windows-Leistungsindikatoren kennen keine Temperatur; "
+                        "amdgpu_top oder nvidia-smi liefern sie"
+                    ),
+                    power_watts=Fact[float].unsupported_because(
+                        "Windows-Leistungsindikatoren kennen keine Leistungsaufnahme; "
+                        "amdgpu_top oder nvidia-smi liefern sie"
+                    ),
+                )
+            )
+        if not proben:
+            raise RuntimeError("Leistungsindikatoren nennen keine Grafikkarte")
+        return proben
+
+
 _PROBES: list[tuple[str, Callable[[], list[GpuSample]]]] = [
     ("rocm-smi", _probe_rocm_smi),
     ("amdgpu_top", _probe_amdgpu_top),
     ("nvidia-smi", _probe_nvidia_smi),
+    # Zuletzt: die anderen Quellen liefern zusaetzlich Temperatur und
+    # Leistungsaufnahme. Wo sie fehlen, ist das hier besser als nichts.
+    ("windows-counters", _WindowsZaehlerProbe()),
 ]
 
 
