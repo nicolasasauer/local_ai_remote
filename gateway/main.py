@@ -42,13 +42,14 @@ from .schema import (
     ModelRef,
     ModelState,
 )
-from .telemetry import TelemetryReader
+from .telemetry import Telemetrieverteiler, TelemetryReader
 
 VERSION = "0.1.0"
 
 _http: httpx.AsyncClient | None = None
 _backends: dict[BackendId, Backend] = {}
 _reader = TelemetryReader()
+_verteiler = Telemetrieverteiler(_reader, CONFIG.telemetry_interval)
 
 
 #: Der Name bleibt lesbar, nur der Wert verschwindet - sonst sieht man dem
@@ -395,10 +396,13 @@ async def telemetry(ws: WebSocket, token: str = Query(default="")) -> None:
 
     await ws.accept()
     try:
-        while True:
-            sample = await asyncio.to_thread(_reader.sample)
-            await ws.send_text(json.dumps(sample.model_dump(mode="json")))
-            await asyncio.sleep(CONFIG.telemetry_interval)
+        # Nicht selbst messen: CPU und GPU-Auslastung sind Differenzwerte,
+        # und zwei Verbindungen, die denselben Leser antreiben, messen sich
+        # gegenseitig kaputt.
+        async with _verteiler.zuhoeren() as warteschlange:
+            while True:
+                probe = await warteschlange.get()
+                await ws.send_text(json.dumps(probe.model_dump(mode="json")))
     except (WebSocketDisconnect, RuntimeError):
         return
 

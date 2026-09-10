@@ -101,6 +101,46 @@ class TestSpeicher:
         assert werte[RX] == 3_000
 
 
+class TestBezugspunkt:
+    """Auslastung ist eine Rate und braucht zwei Messpunkte.
+
+    Der erste wird beim Anlegen gesetzt. Das ging schon einmal schief:
+    `_sammeln` ist ein Generator, und ein nicht ausgelesener Generator fuehrt
+    gar nichts aus - der Bezugspunkt fehlte, und die erste Auslastung nach
+    jedem Gateway-Start war 0 %.
+    """
+
+    def test_sammeln_ist_ein_generator(self):
+        import inspect
+
+        from gateway.windows_gpu import WindowsGpuZaehler
+
+        # Wenn das je aufhoert zu gelten, ist die Falle weg - und dieser Test
+        # darf verschwinden.
+        assert inspect.isgeneratorfunction(WindowsGpuZaehler._sammeln)
+
+    def test_bezugspunkt_sammelt_wirklich(self):
+        from gateway.windows_gpu import WindowsGpuZaehler
+
+        class FakePdh:
+            def __init__(self):
+                self.aufrufe = 0
+
+            def PdhCollectQueryData(self, abfrage):
+                self.aufrufe += 1
+                return 0
+
+        # Ohne __init__, damit der Test ohne Windows laeuft.
+        z = object.__new__(WindowsGpuZaehler)
+        z._pdh = FakePdh()
+        z._engine = ("abfrage-engine", "zaehler")
+        z._speicher = ("abfrage-speicher", "zaehler")
+
+        z._bezugspunkt()
+
+        assert z._pdh.aufrufe == 2, "beide Abfragen brauchen einen Bezugspunkt"
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="nur unter Windows")
 class TestGegenDasEchteSystem:
     """Prueft die ctypes-Anbindung, nicht die Werte selbst."""

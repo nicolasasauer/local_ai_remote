@@ -9,6 +9,8 @@ sieht sonst genauso aus wie eine im Idle.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import shutil
 import subprocess
@@ -308,3 +310,56 @@ class TelemetryReader:
             gpus=gpus,
             gpu_note=note,
         )
+
+
+class Telemetrieverteiler:
+    """Misst einmal zentral und verteilt an alle Zuhoerer.
+
+    Vorher trieb jede WebSocket-Verbindung den ``TelemetryReader`` in ihrer
+    eigenen Schleife an. Das ging so lange gut, wie nur einer zuhoerte: CPU
+    und GPU-Auslastung sind **Differenzmessungen**. Bei zwei Verbindungen
+    landeten zwei Abrufe dicht beieinander, das Zeitfenster ging gegen null -
+    und die Anzeige sprang zwischen dem echten Wert und 0 %.
+
+    Der Leser wird deshalb nur noch von hier aufgerufen, in festem Takt. Wer
+    zuhoert, bekommt eine eigene Warteschlange mit Platz fuer genau einen
+    Wert: ein langsamer Client verzoegert die anderen nicht, er verpasst
+    hoechstens eine Messung.
+    """
+
+    def __init__(self, reader: TelemetryReader, interval: float) -> None:
+        self._reader = reader
+        self._interval = interval
+        self._zuhoerer: set[asyncio.Queue[TelemetrySample]] = set()
+        self._aufgabe: asyncio.Task[None] | None = None
+
+    @contextlib.asynccontextmanager
+    async def zuhoeren(self):
+        """Eine Warteschlange, solange der Aufrufer sie braucht."""
+        warteschlange: asyncio.Queue[TelemetrySample] = asyncio.Queue(maxsize=1)
+        self._zuhoerer.add(warteschlange)
+        # Erst bei Bedarf messen: ohne Zuhoerer muss nichts laufen, und die
+        # PDH-Abfragen bleiben zu.
+        if self._aufgabe is None or self._aufgabe.done():
+            self._aufgabe = asyncio.create_task(self._lauf())
+        try:
+            yield warteschlange
+        finally:
+            self._zuhoerer.discard(warteschlange)
+            if not self._zuhoerer and self._aufgabe is not None:
+                self._aufgabe.cancel()
+                self._aufgabe = None
+
+    async def _lauf(self) -> None:
+        while True:
+            probe = await asyncio.to_thread(self._reader.sample)
+            for warteschlange in list(self._zuhoerer):
+                if warteschlange.full():
+                    # Der Zuhoerer haengt noch am vorigen Wert. Den alten
+                    # wegwerfen: eine veraltete Messung ist wertloser als die
+                    # neue.
+                    with contextlib.suppress(asyncio.QueueEmpty):
+                        warteschlange.get_nowait()
+                with contextlib.suppress(asyncio.QueueFull):
+                    warteschlange.put_nowait(probe)
+            await asyncio.sleep(self._interval)

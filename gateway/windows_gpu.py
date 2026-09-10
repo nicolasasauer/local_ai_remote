@@ -229,8 +229,14 @@ class WindowsGpuZaehler:
         self._engine = self._oeffnen(_PFAD_ENGINE)
         self._speicher = self._oeffnen(_PFAD_SPEICHER)
         # Bezugspunkt setzen, damit der erste echte Aufruf schon Werte hat.
-        self._sammeln(self._engine)
-        self._sammeln(self._speicher)
+        # Direkt sammeln statt ueber `_sammeln`: das ist ein Generator, und
+        # ein nicht ausgelesener Generator fuehrt gar nichts aus - der
+        # Bezugspunkt fehlte dann, und die erste Auslastung waere 0 %.
+        self._bezugspunkt()
+
+    def _bezugspunkt(self) -> None:
+        for abfrage, _ in (self._engine, self._speicher):
+            self._pdh.PdhCollectQueryData(abfrage)
 
     def _oeffnen(self, pfad: str) -> tuple[wintypes.HANDLE, wintypes.HANDLE]:
         abfrage = wintypes.HANDLE()
