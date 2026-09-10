@@ -24,6 +24,7 @@ ersetzt, die App-Tests nutzen eine SQLite-Datenbank im Arbeitsspeicher.
 | Datei | Prüft |
 |---|---|
 | `gateway/tests/test_gateway.py` | Auth (401 ohne/mit falschem Token, WebSocket), `.env`-Laden und Fail-Fast bei leerem oder kurzem Token, `reasoning` als eigener Event-Typ, `think`-Durchreichung, ausgefallenes Backend blockiert die Modellliste nicht, `Fact`-Lücken tragen eine Begründung |
+| `gateway/tests/test_telemetrie_verteiler.py` | einmal messen, an alle verteilen: zwei Zuhörer treiben den Leser nicht doppelt an, ohne Zuhörer wird nicht gemessen, ein langsamer Zuhörer bremst die anderen nicht |
 | `gateway/tests/test_windows_gpu.py` | Auswertung der GPU-Zähler: Prozesse einer Engine addieren, über Engine-Arten das Maximum nehmen, die beiden Formen der Instanznamen, Groß-/Kleinschreibung der LUID. Der ctypes-Teil läuft nur unter Windows und ist entsprechend markiert |
 | `gateway/tests/test_research.py` | die Absicherung des Seitenabrufs: interne Adressen, Tailnet, Umleitungen ins lokale Netz, mehrfache DNS-Antworten, fremde Schemata, Binärinhalte — und dass die App keine eigenen Werkzeuge vorgeben kann |
 | `gateway/tests/test_responses.py` | die zwei Normalisierungen der Responses-API: eingebaute Werkzeugtypen fliegen raus, `developer`-Anweisungen werden in `instructions` gefaltet — ohne beides scheitert die Codex CLI mit HTTP 500 |
@@ -78,6 +79,30 @@ dort `usesCleartextTraffic`. Im Release-Build braucht es die HTTPS-Adresse aus
 | 7 | Erste Frage in einem frischen Chat | Chat wird nach der Frage benannt **und die Frage bleibt sichtbar** |
 | 8 | Modell mitten im Chat wechseln | Verlauf bleibt vollständig, Kontext wird neu geschätzt (`~` kehrt zurück) |
 | 9 | Falscher Token in den Einstellungen | `401` mit lesbarer Meldung, keine leere Liste ohne Erklärung |
+
+### Telemetrie mit zwei Zuhörern
+
+Der Fall, der den Fehler aufgedeckt hat, und der einzige, in dem er sichtbar
+wird. CPU- und GPU-Auslastung sind Differenzmessungen; mit **einem** Zuhörer
+stimmten die Werte, mit **zweien** sprang die Anzeige zwischen dem echten Wert
+und 0 %.
+
+Zum Gegenprüfen: App verbinden, zusätzlich eine zweite Verbindung öffnen, und
+beide Ströme gegen den Windows-Zähler halten — während echte Last läuft.
+
+```powershell
+Get-Counter "\GPU Engine(*)\Utilization Percentage" |
+  ForEach-Object { $_.CounterSamples } |
+  Group-Object { ($_.InstanceName -split "_engtype_")[-1] } |
+  ForEach-Object { "{0,-14} {1,6:N1} %" -f $_.Name, (($_.Group | Measure-Object CookedValue -Sum).Sum) }
+```
+
+Erwartung: beide Zuhörer bekommen **identische** Werte, und die liegen im
+Bereich des Zählers. Ein Sägezahn zwischen ~100 % und 0 % heißt, dass wieder
+jede Verbindung selbst misst.
+
+Der Task-Manager taugt als zweite Referenz: seine GPU-Anzeige ist ebenfalls
+das Maximum über die Engine-Arten, nicht deren Summe.
 
 ### Recherche in der App
 
