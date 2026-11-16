@@ -25,8 +25,7 @@ Auth-Schicht vor Server setzen, die selbst keine haben.
 **Desktop**
 
 ```powershell
-pip install -r gateway
-equirements.txt
+pip install -r gateway\requirements.txt
 Copy-Item gateway\.env.example gateway\.env
 # GATEWAY_TOKEN setzen:
 python -c "import secrets; print(secrets.token_urlsafe(32))"
@@ -117,6 +116,13 @@ verfolgt Umleitungen selbst. Blockiert sind Loopback, private Netze,
 Link-Local, Cloud-Metadaten — und ausdrücklich `100.64.0.0/10`, weil Python
 Tailscale-Adressen nicht als privat kennt und dort dieses Gateway selbst
 steht.
+
+Verbunden wird mit **genau der geprüften IP**; der Name reist nur als `Host`
+und per SNI mit, gegen ihn wird auch das Zertifikat geprüft. Löste der Abruf
+den Namen selbst noch einmal auf, könnte ein Name mit kurzer Gültigkeit bei
+der Prüfung öffentlich und beim Verbinden auf `127.0.0.1` zeigen
+(DNS-Rebinding). Gelesen wird höchstens `GATEWAY_RESEARCH_MAX_BYTES` (2 MB);
+eine Seite mit endlosem Körper wird abgeschnitten statt ganz geladen.
 
 Für die Websuche braucht es eine Quelle. Ein lokales SearXNG liegt als
 `docker compose` bei und passt am besten zum Rest des Projekts — siehe

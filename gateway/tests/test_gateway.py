@@ -156,6 +156,50 @@ class TestAuth:
                 pass
 
 
+class TestKoerperGrenze:
+    """Die Grenze muss halten, was ankommt - nicht, was der Header behauptet."""
+
+    @pytest.fixture
+    def klein(self, client, monkeypatch):
+        monkeypatch.setattr(
+            gw, "CONFIG", dataclasses.replace(gw.CONFIG, max_request_bytes=1024)
+        )
+        return client
+
+    def _koerper(self, laenge: int) -> bytes:
+        inhalt = "x" * laenge
+        return json.dumps({
+            "backend": "ollama", "model": "m1",
+            "messages": [{"role": "user", "content": inhalt}],
+        }).encode()
+
+    def test_content_length_ueber_der_grenze(self, klein):
+        r = klein.post("/v1/chat", headers={**auth(), "Content-Type": "application/json"},
+                       content=self._koerper(4000))
+        assert r.status_code == 413
+        assert "GATEWAY_MAX_REQUEST_BYTES" in r.json()["error"]["message"]
+
+    def test_chunked_ohne_content_length_wird_auch_begrenzt(self, klein):
+        # Ein Generator wird ohne Content-Length gesendet. Eine reine
+        # Header-Pruefung liesse diese Anfrage unbegrenzt durch.
+        koerper = self._koerper(4000)
+
+        def stuecke():
+            for i in range(0, len(koerper), 256):
+                yield koerper[i:i + 256]
+
+        r = klein.post("/v1/chat", headers={**auth(), "Content-Type": "application/json"},
+                       content=stuecke())
+        assert r.status_code == 413
+        assert "GATEWAY_MAX_REQUEST_BYTES" in r.json()["error"]["message"]
+
+    def test_chunked_unter_der_grenze_geht_durch(self, klein):
+        koerper = self._koerper(100)
+        r = klein.post("/v1/chat", headers={**auth(), "Content-Type": "application/json"},
+                       content=iter([koerper[:50], koerper[50:]]))
+        assert r.status_code == 200
+
+
 class TestConfig:
     def _cfg(self, token: str, agent_token: str = "") -> Config:
         return Config(

@@ -138,30 +138,90 @@ async def _fehlerhuelle(request: Request, exc: HTTPException) -> JSONResponse:
     )
 
 
-@app.middleware("http")
-async def _limit_body(request: Request, call_next):
+class _ZuGross(Exception):
+    pass
+
+
+def _zu_gross_antwort() -> JSONResponse:
+    return JSONResponse(
+        status_code=413,
+        content={
+            "error": {
+                "message": (
+                    f"Anfrage ist groesser als das Limit von "
+                    f"{CONFIG.max_request_bytes} Bytes "
+                    "(GATEWAY_MAX_REQUEST_BYTES)."
+                ),
+                "type": "invalid_request_error",
+            }
+        },
+    )
+
+
+class _KoerperGrenze:
     """Obergrenze fuer den Anfragekoerper.
 
     Agenten-Werkzeuge schicken ganze Projektdateien mit. Ohne Grenze zieht
     eine einzige verirrte Anfrage den Speicher des Desktops leer - und der
     Desktop ist hier auch der Rechner, auf dem das Modell laeuft.
+
+    Gezaehlt wird, was **tatsaechlich ankommt**, nicht was ``Content-Length``
+    verspricht: eine Anfrage mit ``Transfer-Encoding: chunked`` hat den Header
+    gar nicht und kaeme an einer reinen Header-Pruefung unbegrenzt vorbei.
+    Der Header wird trotzdem zuerst geprueft - dann muss nichts gelesen
+    werden, um abzulehnen.
     """
-    raw = request.headers.get("content-length")
-    if raw and raw.isdigit() and int(raw) > CONFIG.max_request_bytes:
-        return JSONResponse(
-            status_code=413,
-            content={
-                "error": {
-                    "message": (
-                        f"Anfrage ist groesser als das Limit von "
-                        f"{CONFIG.max_request_bytes} Bytes "
-                        "(GATEWAY_MAX_REQUEST_BYTES)."
-                    ),
-                    "type": "invalid_request_error",
-                }
-            },
-        )
-    return await call_next(request)
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        grenze = CONFIG.max_request_bytes
+        for name, wert in scope.get("headers", []):
+            if name == b"content-length" and wert.isdigit() and int(wert) > grenze:
+                await _zu_gross_antwort()(scope, receive, send)
+                return
+
+        gelesen = 0
+        ueberschritten = False
+        ersetzt = False
+
+        async def begrenzt_empfangen():
+            nonlocal gelesen, ueberschritten
+            nachricht = await receive()
+            if nachricht["type"] == "http.request":
+                gelesen += len(nachricht.get("body", b""))
+                if gelesen > grenze:
+                    ueberschritten = True
+                    # Bricht das Lesen ab. FastAPI faengt das beim Parsen
+                    # selbst und antwortet 400 - das wird unten ersetzt.
+                    raise _ZuGross
+            return nachricht
+
+        async def senden(nachricht):
+            nonlocal ersetzt
+            if ueberschritten:
+                # Was die App nach dem Abbruch antworten wollte, ist eine
+                # Folge des Abbruchs, nicht der eigentliche Grund.
+                if not ersetzt:
+                    ersetzt = True
+                    await _zu_gross_antwort()(scope, receive, send)
+                return
+            await send(nachricht)
+
+        try:
+            await self.app(scope, begrenzt_empfangen, senden)
+        except _ZuGross:
+            if not ersetzt:
+                ersetzt = True
+                await _zu_gross_antwort()(scope, receive, send)
+
+
+app.add_middleware(_KoerperGrenze)
 
 
 def require_token(authorization: str | None = Header(default=None)) -> None:

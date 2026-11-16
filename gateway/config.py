@@ -62,6 +62,11 @@ class Config:
     research_max_results: int
     research_max_chars: int
 
+    #: Obergrenze fuer den Rohkoerper einer abgerufenen Seite. HTML ist ein
+    #: Vielfaches des Textes darin, deshalb deutlich ueber research_max_chars.
+    #: Mit Vorgabewert, damit bestehende Aufrufer weiterlaufen.
+    research_max_bytes: int = 2 * 1024 * 1024
+
     @classmethod
     def from_env(cls) -> "Config":
         _load_env_file()
@@ -88,6 +93,9 @@ class Config:
             research_timeout=float(os.getenv("GATEWAY_RESEARCH_TIMEOUT", "20")),
             research_max_results=int(os.getenv("GATEWAY_RESEARCH_MAX_RESULTS", "6")),
             research_max_chars=int(os.getenv("GATEWAY_RESEARCH_MAX_CHARS", "12000")),
+            research_max_bytes=int(
+                os.getenv("GATEWAY_RESEARCH_MAX_BYTES", str(2 * 1024 * 1024))
+            ),
         )
 
     def check(self) -> None:

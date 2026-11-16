@@ -137,6 +137,19 @@ async def pruefe_url(url: str) -> str:
     der Pruefung vorbeizukommen. Alle Antworten des Namensdienstes muessen
     erlaubt sein, nicht nur die erste.
     """
+    await _gepruefte_adresse(url)
+    return url
+
+
+async def _gepruefte_adresse(
+    url: str,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    """Wie :func:`pruefe_url`, liefert aber die gepruefte Adresse.
+
+    Der Abruf muss **genau diese** ansprechen. Loeste er den Namen selbst
+    noch einmal auf, koennte ein Name mit kurzer Gueltigkeit bei der Pruefung
+    oeffentlich und beim Verbinden auf 127.0.0.1 zeigen (DNS-Rebinding).
+    """
     zerlegt = urlparse(url)
     if zerlegt.scheme not in ("http", "https"):
         raise RechercheFehler(
@@ -155,10 +168,12 @@ async def pruefe_url(url: str) -> str:
             f"Hostname '{zerlegt.hostname}' nicht aufloesbar: {exc}"
         ) from exc
 
+    geprueft: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
     for eintrag in infos:
         roh = eintrag[4][0]
         try:
-            ip = ipaddress.ip_address(roh)
+            # IPv6 mit Zonenangabe ("fe80::1%eth0") ist ohnehin Link-Local.
+            ip = ipaddress.ip_address(roh.split("%", 1)[0])
         except ValueError:
             raise RechercheFehler(f"Unlesbare Adresse: {roh}")
         if not _adresse_erlaubt(ip):
@@ -167,7 +182,10 @@ async def pruefe_url(url: str) -> str:
                 "Netz oder im Tailnet. Der Abruf ist auf oeffentliche Adressen "
                 "beschraenkt."
             )
-    return url
+        geprueft.append(ip)
+    if not geprueft:
+        raise RechercheFehler(f"Hostname '{zerlegt.hostname}' hat keine Adresse.")
+    return geprueft[0]
 
 
 # ---------------------------------------------------------------------------
@@ -238,38 +256,96 @@ class Ergebnis(BaseModel):
     gekuerzt: bool = False
 
 
-async def _abrufen(http: httpx.AsyncClient, url: str) -> tuple[str, str]:
+def _an_adresse(url: str, ip: ipaddress.IPv4Address | ipaddress.IPv6Address):
+    """Baut die Anfrage so, dass die Verbindung zur gepruften IP geht.
+
+    Fuer den Server bleibt es der Name: ``Host`` traegt ihn, und bei HTTPS
+    geht er per SNI mit - gegen ihn wird auch das Zertifikat geprueft, eine
+    falsche Seite faellt also weiterhin durch.
+    """
+    original = httpx.URL(url)
+    return (
+        original.copy_with(host=str(ip)),
+        original.netloc.decode("ascii"),
+        {"sni_hostname": original.host} if original.scheme == "https" else {},
+    )
+
+
+def _dekodieren(roh: bytes, zeichensatz: Optional[str]) -> str:
+    try:
+        return roh.decode(zeichensatz or "utf-8", errors="replace")
+    except LookupError:
+        # Unbekannter Zeichensatz im Header - lieber lesbar als gar nicht.
+        return roh.decode("utf-8", errors="replace")
+
+
+async def _abrufen(http: httpx.AsyncClient, url: str) -> tuple[str, str, bool]:
     """Holt eine Seite, mit eigener Umleitungsverfolgung.
 
     httpx wuerde Umleitungen selbst folgen - dann bliebe das Ziel ungeprueft,
     und eine oeffentliche Adresse koennte auf 127.0.0.1 weiterleiten.
+
+    Der Koerper wird gestreamt und nach ``research_max_bytes`` abgeschnitten.
+    Erst alles zu laden und dann zu kuerzen hiesse, dass eine einzige Seite
+    mit endlosem Koerper dem Desktop den Speicher leerzieht.
+
+    Liefert Text, endgueltige Adresse und ob abgeschnitten wurde.
     """
     aktuell = url
+    grenze = CONFIG.research_max_bytes
     for _ in range(4):
-        await pruefe_url(aktuell)
-        antwort = await http.get(
-            aktuell,
+        ip = await _gepruefte_adresse(aktuell)
+        ziel_url, host, erweiterungen = _an_adresse(aktuell, ip)
+        async with http.stream(
+            "GET",
+            ziel_url,
             follow_redirects=False,
             timeout=CONFIG.research_timeout,
-            headers={"User-Agent": "local-ai-remote/1.0 (Recherche-Werkzeug)"},
-        )
-        if antwort.is_redirect:
-            ziel = antwort.headers.get("location")
-            if not ziel:
-                raise RechercheFehler("Umleitung ohne Ziel.")
-            aktuell = str(httpx.URL(aktuell).join(ziel))
-            continue
+            headers={
+                "Host": host,
+                "User-Agent": "local-ai-remote/1.0 (Recherche-Werkzeug)",
+                # Der Verbindungspool kennt nur die IP. Ohne das liefe ein
+                # Abruf von b.example ueber eine Verbindung, deren Zertifikat
+                # fuer a.example geprueft wurde - etwa hinter einem CDN.
+                "Connection": "close",
+            },
+            extensions=erweiterungen,
+        ) as antwort:
+            if antwort.is_redirect:
+                ziel = antwort.headers.get("location")
+                if not ziel:
+                    raise RechercheFehler("Umleitung ohne Ziel.")
+                # Gegen den Namen aufloesen, nicht gegen die IP - sonst
+                # waere das naechste Ziel eine nackte Adresse ohne Host.
+                aktuell = str(httpx.URL(aktuell).join(ziel))
+                continue
 
-        if antwort.status_code >= 400:
-            raise RechercheFehler(
-                f"Die Seite antwortete mit {antwort.status_code}."
-            )
-        typ = antwort.headers.get("content-type", "")
-        if not any(t in typ for t in ("text/", "json", "xml")):
-            raise RechercheFehler(
-                f"Inhaltstyp '{typ or 'unbekannt'}' wird nicht gelesen; nur Text."
-            )
-        return antwort.text, aktuell
+            if antwort.status_code >= 400:
+                raise RechercheFehler(
+                    f"Die Seite antwortete mit {antwort.status_code}."
+                )
+            typ = antwort.headers.get("content-type", "")
+            if not any(t in typ for t in ("text/", "json", "xml")):
+                raise RechercheFehler(
+                    f"Inhaltstyp '{typ or 'unbekannt'}' wird nicht gelesen; nur Text."
+                )
+
+            teile: list[bytes] = []
+            gelesen = 0
+            abgeschnitten = False
+            async for stueck in antwort.aiter_bytes():
+                rest = grenze - gelesen
+                if len(stueck) >= rest:
+                    teile.append(stueck[:rest])
+                    # Genau an der Grenze zu enden ist noch kein Abschneiden,
+                    # aber ob mehr kommt, wissen wir nicht - und wollen es
+                    # nicht herausfinden.
+                    abgeschnitten = True
+                    break
+                teile.append(stueck)
+                gelesen += len(stueck)
+            text = _dekodieren(b"".join(teile), antwort.charset_encoding)
+            return text, aktuell, abgeschnitten
 
     raise RechercheFehler("Zu viele Umleitungen.")
 
@@ -358,10 +434,10 @@ async def ausfuehren(
         url = str(werte.get("url") or "").strip()
         if not url:
             raise RechercheFehler("Keine Adresse angegeben.")
-        roh, endgueltig = await _abrufen(http, url)
+        roh, endgueltig, abgeschnitten = await _abrufen(http, url)
         text = html_zu_text(roh)
         grenze = CONFIG.research_max_chars
-        gekuerzt = len(text) > grenze
+        gekuerzt = abgeschnitten or len(text) > grenze
         if gekuerzt:
             text = text[:grenze]
         return Ergebnis(

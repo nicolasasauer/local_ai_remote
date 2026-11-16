@@ -177,6 +177,75 @@ class TestAusfuehrung:
         assert ergebnis.quellen[0].url == "https://example.com/"
 
     @pytest.mark.asyncio
+    async def test_abruf_geht_an_die_gepruefte_adresse(self, monkeypatch):
+        # DNS-Rebinding zwischen Pruefung und Abruf: der Name liefert beim
+        # ersten Mal eine oeffentliche Adresse, danach 127.0.0.1. Loest der
+        # Abruf selbst noch einmal auf, ist die Pruefung wertlos - also muss
+        # er genau die Adresse ansprechen, die geprueft wurde.
+        antworten = iter(["93.184.216.34"])
+
+        async def getaddrinfo(host, port, **kw):
+            adresse = next(antworten, "127.0.0.1")
+            return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "",
+                     (adresse, port))]
+
+        import asyncio
+        from types import SimpleNamespace
+
+        monkeypatch.setattr(
+            asyncio, "get_running_loop",
+            lambda: SimpleNamespace(getaddrinfo=getaddrinfo),
+        )
+        gesehen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            gesehen.append(request)
+            return httpx.Response(200, text="<p>ok</p>",
+                                  headers={"content-type": "text/html"})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            ergebnis = await ausfuehren(
+                http, research.SEITE_ABRUFEN, '{"url": "https://rebind.example/a"}'
+            )
+
+        anfrage = gesehen[0]
+        assert anfrage.url.host == "93.184.216.34"
+        # Fuer den Server und das Zertifikat bleibt es der Name.
+        assert anfrage.headers["host"] == "rebind.example"
+        assert anfrage.extensions.get("sni_hostname") == "rebind.example"
+        # Nach aussen bleibt die Quelle der Name, nicht die IP.
+        assert ergebnis.quellen[0].url == "https://rebind.example/a"
+
+    @pytest.mark.asyncio
+    async def test_riesige_seite_wird_beim_lesen_abgeschnitten(self, monkeypatch):
+        # Erst alles laden und dann kuerzen hiesse: eine Seite mit endlosem
+        # Koerper zieht dem Desktop den Speicher leer.
+        _aufloesung(monkeypatch, ["93.184.216.34"])
+        monkeypatch.setattr(
+            research, "CONFIG",
+            dataclasses.replace(research.CONFIG, research_max_bytes=4096),
+        )
+        geliefert = 0
+
+        async def endlos():
+            nonlocal geliefert
+            for _ in range(10_000):
+                geliefert += 1
+                yield b"<p>" + b"x" * 1021 + b"</p>"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=endlos(),
+                                  headers={"content-type": "text/html"})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            ergebnis = await ausfuehren(
+                http, research.SEITE_ABRUFEN, '{"url": "https://example.com/"}'
+            )
+
+        assert ergebnis.gekuerzt is True
+        assert geliefert < 20
+
+    @pytest.mark.asyncio
     async def test_binaerinhalt_wird_nicht_gelesen(self, monkeypatch):
         _aufloesung(monkeypatch, ["93.184.216.34"])
 

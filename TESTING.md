@@ -23,10 +23,10 @@ ersetzt, die App-Tests nutzen eine SQLite-Datenbank im Arbeitsspeicher.
 
 | Datei | Prüft |
 |---|---|
-| `gateway/tests/test_gateway.py` | Auth (401 ohne/mit falschem Token, WebSocket), `.env`-Laden und Fail-Fast bei leerem oder kurzem Token, `reasoning` als eigener Event-Typ, `think`-Durchreichung, ausgefallenes Backend blockiert die Modellliste nicht, `Fact`-Lücken tragen eine Begründung |
+| `gateway/tests/test_gateway.py` | Auth (401 ohne/mit falschem Token, WebSocket), `.env`-Laden und Fail-Fast bei leerem oder kurzem Token, Obergrenze des Anfragekörpers auch ohne `Content-Length` (chunked), `reasoning` als eigener Event-Typ, `think`-Durchreichung, ausgefallenes Backend blockiert die Modellliste nicht, `Fact`-Lücken tragen eine Begründung |
 | `gateway/tests/test_telemetrie_verteiler.py` | einmal messen, an alle verteilen: zwei Zuhörer treiben den Leser nicht doppelt an, ohne Zuhörer wird nicht gemessen, ein langsamer Zuhörer bremst die anderen nicht |
 | `gateway/tests/test_windows_gpu.py` | Auswertung der GPU-Zähler: Prozesse einer Engine addieren, über Engine-Arten das Maximum nehmen, die beiden Formen der Instanznamen, Groß-/Kleinschreibung der LUID. Der ctypes-Teil läuft nur unter Windows und ist entsprechend markiert |
-| `gateway/tests/test_research.py` | die Absicherung des Seitenabrufs: interne Adressen, Tailnet, Umleitungen ins lokale Netz, mehrfache DNS-Antworten, fremde Schemata, Binärinhalte — und dass die App keine eigenen Werkzeuge vorgeben kann |
+| `gateway/tests/test_research.py` | die Absicherung des Seitenabrufs: interne Adressen, Tailnet, Umleitungen ins lokale Netz, mehrfache DNS-Antworten, DNS-Rebinding zwischen Prüfung und Abruf (verbunden wird mit der geprüften IP), Abschneiden beim Lesen statt nach dem Laden, fremde Schemata, Binärinhalte — und dass die App keine eigenen Werkzeuge vorgeben kann |
 | `gateway/tests/test_responses.py` | die zwei Normalisierungen der Responses-API: eingebaute Werkzeugtypen fliegen raus, `developer`-Anweisungen werden in `instructions` gefaltet — ohne beides scheitert die Codex CLI mit HTTP 500 |
 | `gateway/tests/test_tools.py` | Werkzeugaufrufe auf Adapter-Ebene: Ollamas Objekt-Argumente werden zum JSON-String, LM Studios Fragmente werden zusammengesetzt, `stop` wird zu `tool_calls`, und der Verlauf geht in der jeweils erwarteten Form zurück |
 | `gateway/tests/test_backends.py` | was die Adapter tatsächlich senden und wie sie die Antwort lesen — `think` bei Ollama, `stream_options` bei LM Studio, Denkschritte getrennt vom Antworttext, Modellverwechslung |
@@ -144,8 +144,7 @@ Einstellungen.
 ```powershell
 flutter build apk --release
 # Manifest gegenprüfen, bevor die APK auf ein Gerät geht:
-Select-String -Path buildpp\intermediates\merged_manifests
-elease\*\AndroidManifest.xml -Pattern "permission.INTERNET"
+Select-String -Path build\app\intermediates\merged_manifests\release\*\AndroidManifest.xml -Pattern "permission.INTERNET"
 ```
 
 ### Agentenschleife

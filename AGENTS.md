@@ -124,7 +124,9 @@ eine fremde Datei hineingeschrieben hat.
 
 **Obergrenze für den Anfragekörper** (`GATEWAY_MAX_REQUEST_BYTES`, 32 MB).
 Agenten schicken ganze Projektdateien; der Desktop ist derselbe Rechner, auf
-dem das Modell läuft.
+dem das Modell läuft. Gezählt wird, was ankommt, nicht was `Content-Length`
+verspricht — eine Anfrage mit `Transfer-Encoding: chunked` hat den Header gar
+nicht.
 
 **Fehler im OpenAI-Format.** `{"error": {"message": …}}` auf oberster Ebene,
 nicht in FastAPIs `detail` verpackt — sonst finden Clients die Meldung nicht
