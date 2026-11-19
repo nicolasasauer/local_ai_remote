@@ -63,6 +63,18 @@ LM Studio muss laufen (`lms server start` oder GUI mit aktivem Server).
 
 **App**
 
+Fertige Builds hängen unter *Releases* am Repo: `lokal-ai-vX.Y.Z.apk` fürs
+Telefon, `lokal-ai-vX.Y.Z-windows.zip` für den Desktop. Die APK ist mit
+Flutters Debug-Schlüssel signiert — Android fragt nach „Unbekannten Quellen",
+und ein Update aus einem anderen Build lässt sich eventuell nur nach
+Deinstallation einspielen. Ein neues Release entsteht mit einem Tag:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+Selbst bauen:
+
 ```bash
 cd app
 flutter create --platforms=android,windows --org de.nicolas .

@@ -7,6 +7,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Standard ist nur Lesen; der Release-Job holt sich Schreibrecht selbst.
+permissions:
+  contents: read
+
 jobs:
   gateway:
     runs-on: ubuntu-latest
@@ -87,3 +91,31 @@ jobs:
         with:
           name: windows
           path: app/build/windows/x64/runner/Release/
+
+  # Nur bei einem Tag v*: APK und Windows-Build als Release anhaengen. Die
+  # Artefakte oben laufen nach 90 Tagen ab und brauchen ein GitHub-Konto, ein
+  # Release nicht.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [android, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Dateien benennen
+        run: |
+          mv dist/apk/app-release.apk "dist/lokal-ai-${GITHUB_REF_NAME}.apk"
+          (cd dist/windows && zip -qr "../lokal-ai-${GITHUB_REF_NAME}-windows.zip" .)
+      - name: Release anlegen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            "dist/lokal-ai-${GITHUB_REF_NAME}.apk" \
+            "dist/lokal-ai-${GITHUB_REF_NAME}-windows.zip"
