@@ -15,7 +15,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -r gateway/requirements.txt pytest
+      - run: pip install -r gateway/requirements-dev.txt
       - run: python -m pytest gateway/tests -q
 
   app-test:

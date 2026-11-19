@@ -1,0 +1,6 @@
+# Nur fuer die Tests. pytest.ini setzt asyncio_mode = auto und die
+# Adapter-Tests sind async - ohne pytest-asyncio scheitern sie alle mit
+# "async def functions are not natively supported".
+-r requirements.txt
+pytest>=8
+pytest-asyncio>=0.24
