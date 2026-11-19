@@ -6,6 +6,11 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      release:
+        description: 'Version als Release veroeffentlichen, z. B. v0.1.0 (leer = nur bauen)'
+        required: false
+        default: ''
 
 # Standard ist nur Lesen; der Release-Job holt sich Schreibrecht selbst.
 permissions:
@@ -92,30 +97,38 @@ jobs:
           name: windows
           path: app/build/windows/x64/runner/Release/
 
-  # Nur bei einem Tag v*: APK und Windows-Build als Release anhaengen. Die
-  # Artefakte oben laufen nach 90 Tagen ab und brauchen ein GitHub-Konto, ein
-  # Release nicht.
+  # Bei einem Tag v* oder einem manuellen Start mit Version: APK und
+  # Windows-Build als Release anhaengen. Die Artefakte oben laufen nach 90
+  # Tagen ab und brauchen ein GitHub-Konto, ein Release nicht. Beim manuellen
+  # Start legt `gh release create` den Tag auf dem gebauten Commit an.
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release != '')
     needs: [android, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release }}
     steps:
+      - name: Version pruefen
+        run: |
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] \
+            || { echo "::error::Ungueltige Version: $VERSION"; exit 1; }
       - uses: actions/download-artifact@v4
         with:
           path: dist
       - name: Dateien benennen
         run: |
-          mv dist/apk/app-release.apk "dist/lokal-ai-${GITHUB_REF_NAME}.apk"
-          (cd dist/windows && zip -qr "../lokal-ai-${GITHUB_REF_NAME}-windows.zip" .)
+          mv dist/apk/app-release.apk "dist/lokal-ai-${VERSION}.apk"
+          (cd dist/windows && zip -qr "../lokal-ai-${VERSION}-windows.zip" .)
       - name: Release anlegen
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
+          gh release create "$VERSION" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "$GITHUB_REF_NAME" \
+            --target "$GITHUB_SHA" \
+            --title "$VERSION" \
             --generate-notes \
-            "dist/lokal-ai-${GITHUB_REF_NAME}.apk" \
-            "dist/lokal-ai-${GITHUB_REF_NAME}-windows.zip"
+            "dist/lokal-ai-${VERSION}.apk" \
+            "dist/lokal-ai-${VERSION}-windows.zip"

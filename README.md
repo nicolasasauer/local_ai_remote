@@ -67,11 +67,14 @@ Fertige Builds hängen unter *Releases* am Repo: `lokal-ai-vX.Y.Z.apk` fürs
 Telefon, `lokal-ai-vX.Y.Z-windows.zip` für den Desktop. Die APK ist mit
 Flutters Debug-Schlüssel signiert — Android fragt nach „Unbekannten Quellen",
 und ein Update aus einem anderen Build lässt sich eventuell nur nach
-Deinstallation einspielen. Ein neues Release entsteht mit einem Tag:
+Deinstallation einspielen. Ein neues Release entsteht entweder mit einem Tag
 
 ```bash
 git tag v0.1.0 && git push origin v0.1.0
 ```
+
+oder ohne Tag unter *Actions → build → Run workflow* mit der Version im Feld
+`release` — der Tag wird dann auf GitHub angelegt.
 
 Selbst bauen:
 
