@@ -7,6 +7,7 @@ Szenarienliste unten und wird von Hand gefahren.
 ## Automatisiert
 
 ```bash
+pip install -r gateway/requirements-dev.txt   # einmalig, bringt pytest-asyncio mit
 python -m pytest gateway/tests -q     # Gateway, ohne laufende Backends
 cd app && flutter test                # App, ohne Gerät
 ```
