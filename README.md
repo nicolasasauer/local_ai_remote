@@ -203,6 +203,28 @@ Für die Websuche braucht es eine Quelle. Ein lokales SearXNG liegt als
 [search/README.md](search/README.md). Ohne Quelle bietet das Gateway nur den
 Seitenabruf an.
 
+## Modelle laden und herunterladen
+
+Unter *Modelle* → Modell antippen lassen sich pro Modell **Kontextfenster**,
+**Haltedauer** und **GPU-Anteil** einstellen, mit „Jetzt laden" zum
+Vorwärmen. Vor dem Laden zeigt die App eine **Abschätzung**: Gewichte plus
+KV-Cache für das gewählte Fenster gegen den freien Grafikspeicher — „passt",
+„knapp" oder „ein Teil läuft auf der CPU". Fehlt eine Größe (LM Studio nennt
+keine Architekturdaten), steht dort „nicht abschätzbar" mit Grund statt einer
+Zahl.
+
+Mit `GATEWAY_ALLOW_PULL=1` lädt die App neue Modelle über Ollama herunter. Der
+Download läuft im Gateway weiter, auch wenn das Telefon die Verbindung
+verliert. `GATEWAY_MAX_CONTEXT` begrenzt, wie groß die App das Fenster
+stellen darf. Details in [API_CONTRACT.md](API_CONTRACT.md).
+
+Pro Chat einstellbar (*⋮ → Antwortverhalten*): Temperatur und ob ein
+Reasoning-Modell erst nachdenkt.
+
+LM Studio lädt mit Optionen über die CLI (`lms load`). Die Flags dort sind
+gegen die Dokumentation gebaut, aber noch nicht gegen eine echte Installation
+geprüft.
+
 ## Leitgedanken
 
 **Nichts erfinden.** Jeder Wert, der fehlen kann, reist als `Fact` mit

@@ -24,6 +24,8 @@ class _FakeGateway extends GatewayClient {
     required List<Map<String, dynamic>> messages,
     double? temperature,
     bool research = false,
+    bool? think,
+    Map<String, dynamic>? load,
   }) =>
       events.stream;
 }

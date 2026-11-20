@@ -27,7 +27,7 @@ class ChatStore {
     final db = await databaseFactory.openDatabase(
       location,
       options: OpenDatabaseOptions(
-        version: 3,
+        version: 4,
         onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
         onCreate: _createSchema,
         onUpgrade: _upgradeSchema,
@@ -49,7 +49,9 @@ class ChatStore {
         model TEXT,
         compression_enabled INTEGER NOT NULL DEFAULT 0,
         system_prompt TEXT,
-        research_enabled INTEGER NOT NULL DEFAULT 0
+        research_enabled INTEGER NOT NULL DEFAULT 0,
+        temperature REAL,
+        think INTEGER
       )''');
 
     await db.execute('''
@@ -125,6 +127,11 @@ class ChatStore {
       }
       await db.execute(
           'ALTER TABLE chats ADD COLUMN research_enabled INTEGER NOT NULL DEFAULT 0');
+    }
+    if (from < 4) {
+      // Antwortverhalten pro Chat (v4). NULL heisst: Vorgabe des Modells.
+      await db.execute('ALTER TABLE chats ADD COLUMN temperature REAL');
+      await db.execute('ALTER TABLE chats ADD COLUMN think INTEGER');
     }
   }
 

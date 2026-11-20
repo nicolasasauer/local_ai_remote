@@ -34,13 +34,17 @@ from .config import CONFIG, ConfigError
 from .openai_api import router as openai_router
 from .responses_api import router as responses_router
 from . import research
+from .pulls import PullBusy, PullManager
 from .schema import (
     BackendId,
     ChatRequest,
     GatewayHealth,
+    LoadOptions,
+    LoadRequest,
     ModelEntry,
     ModelRef,
     ModelState,
+    PullRequest,
 )
 from .telemetry import Telemetrieverteiler, TelemetryReader
 
@@ -113,6 +117,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await _pulls.shutdown()
         await _http.aclose()
 
 
@@ -248,6 +253,8 @@ async def health(_: None = Depends(require_token)) -> GatewayHealth:
         hostname=platform.node(),
         gateway_version=VERSION,
         backends=list(results),
+        pull_enabled=CONFIG.allow_pull,
+        max_context=CONFIG.max_context or None,
     )
 
 
@@ -283,6 +290,86 @@ async def pin_model(ref: ModelRef, _: None = Depends(require_token)) -> dict:
     return {"state": ModelState.loaded.value, "unloads_at": None}
 
 
+def _check_load(backend: Backend, opts: LoadOptions, *, chat: bool) -> None:
+    """Grenzen des Gateways, dann die des Backends. Beides als 400 mit
+    Grund - ein still gekapptes Kontextfenster faellt erst auf, wenn das
+    Modell den Anfang des Gespraechs vergessen hat."""
+    if (
+        CONFIG.max_context
+        and opts.context_length is not None
+        and opts.context_length > CONFIG.max_context
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Kontextfenster {opts.context_length} liegt ueber der "
+            f"Grenze dieses Gateways ({CONFIG.max_context}, GATEWAY_MAX_CONTEXT)",
+        )
+    if chat:
+        try:
+            backend.check_chat_load(opts)
+        except BackendError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
+
+@app.post("/v1/models/load")
+async def load_model(req: LoadRequest, _: None = Depends(require_token)) -> dict:
+    """Laedt ein Modell jetzt - damit die erste Antwort nicht auf das Laden
+    wartet. Kehrt zurueck, wenn das Modell im Speicher ist."""
+    backend = _backend(req.backend)
+    _check_load(backend, req.load, chat=False)
+    try:
+        await backend.load(req.model, req.load)
+    except BackendError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    return {"state": ModelState.loaded.value}
+
+
+# --- Downloads -------------------------------------------------------------
+
+_pulls = PullManager()
+
+
+def _require_pull() -> None:
+    if not CONFIG.allow_pull:
+        raise HTTPException(
+            status_code=403,
+            detail="Herunterladen ist auf diesem Gateway nicht eingeschaltet "
+            "(GATEWAY_ALLOW_PULL=1)",
+        )
+
+
+@app.get("/v1/models/pulls")
+async def list_pulls(_: None = Depends(require_token)) -> dict:
+    return {
+        "enabled": CONFIG.allow_pull,
+        "jobs": [j.model_dump(mode="json") for j in _pulls.jobs()],
+    }
+
+
+@app.post("/v1/models/pull", status_code=202)
+async def start_pull(req: PullRequest, _: None = Depends(require_token)) -> dict:
+    _require_pull()
+    backend = _backend(BackendId.ollama)
+    pull = getattr(backend, "pull", None)
+    if pull is None:
+        raise HTTPException(status_code=501, detail="Backend kann nicht herunterladen")
+    try:
+        job = _pulls.start(req.model.strip(), pull)
+    except PullBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except BackendError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    return job.model_dump(mode="json")
+
+
+@app.post("/v1/models/pull/cancel")
+async def cancel_pull(req: PullRequest, _: None = Depends(require_token)) -> dict:
+    _require_pull()
+    if not _pulls.cancel(req.model.strip()):
+        raise HTTPException(status_code=404, detail="Kein laufender Download dafuer")
+    return {"cancelled": True}
+
+
 @app.post("/v1/models/unload")
 async def unload_model(ref: ModelRef, _: None = Depends(require_token)) -> dict:
     try:
@@ -302,6 +389,8 @@ HEARTBEAT_INTERVAL = 10.0
 @app.post("/v1/chat")
 async def chat(req: ChatRequest, _: None = Depends(require_token)) -> StreamingResponse:
     backend = _backend(req.backend)
+    if req.load is not None:
+        _check_load(backend, req.load, chat=True)
 
     if req.research:
         if not CONFIG.research_enabled:
@@ -322,7 +411,27 @@ async def chat(req: ChatRequest, _: None = Depends(require_token)) -> StreamingR
             try:
                 entries = await backend.list_models()
                 match = next((m for m in entries if m.id == req.model), None)
-                if match is not None and match.state is not ModelState.loaded:
+                anderes_fenster = (
+                    match is not None
+                    and match.state is ModelState.loaded
+                    and req.load is not None
+                    and req.load.context_length is not None
+                    and match.loaded_context_length.value is not None
+                    and match.loaded_context_length.value != req.load.context_length
+                )
+                if anderes_fenster:
+                    # Ollama laedt dann neu - ohne diesen Hinweis wirkt die
+                    # Pause wie ein Haenger.
+                    await queue.put(
+                        _sse(
+                            {
+                                "type": "status",
+                                "state": "loading_model",
+                                "note": "Wird mit anderem Kontextfenster neu geladen",
+                            }
+                        )
+                    )
+                elif match is not None and match.state is not ModelState.loaded:
                     await queue.put(
                         _sse(
                             {

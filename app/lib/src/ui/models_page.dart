@@ -5,7 +5,9 @@ import '../models/model_entry.dart';
 import '../state/providers.dart';
 import '../theme.dart';
 import 'format.dart';
+import 'widgets/downloads_panel.dart';
 import 'widgets/fact_view.dart';
+import 'widgets/load_options_panel.dart';
 
 class ModelsPage extends ConsumerWidget {
   const ModelsPage({super.key});
@@ -44,6 +46,7 @@ class _ModelList extends ConsumerWidget {
     return ListView(
       padding: const EdgeInsets.only(bottom: 24),
       children: [
+        const DownloadsPanel(),
         for (final error in data.backendErrors)
           _BackendProblem(error: error),
         for (final backend in BackendId.values) ...[
@@ -343,19 +346,22 @@ Future<void> showModelDetails(
                         Text(model.error!,
                             style: const TextStyle(color: Tone.alert)),
                       ),
+                    if (model.kind != ModelKind.embedding)
+                      LoadOptionsPanel(model: model),
                   ],
                 ),
               ),
             ),
             const SizedBox(height: 14),
-            Row(
+            Wrap(
+              spacing: 10,
+              runSpacing: 8,
               children: [
                 OutlinedButton.icon(
                   onPressed: () => _act(context, ref, model, pin: true),
                   icon: const Icon(Icons.push_pin_outlined, size: 16),
                   label: const Text('Im Speicher halten'),
                 ),
-                const SizedBox(width: 10),
                 OutlinedButton.icon(
                   onPressed: () => _act(context, ref, model, pin: false),
                   icon: const Icon(Icons.eject_outlined, size: 16),

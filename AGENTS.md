@@ -106,8 +106,9 @@ zurückziehen, ohne das Telefon neu einzurichten. Beide Vergleiche laufen
 zeitkonstant.
 
 **Getrennte Rechte.** Das Agenten-Token öffnet *nur* Modellliste und Chat. Es
-kommt nicht an `/v1/models/unload`, nicht an `/v1/models/pin`, nicht an die
-Telemetrie. Ein Werkzeug soll dir kein Modell aus dem Speicher werfen, während
+kommt nicht an `/v1/models/unload`, nicht an `/v1/models/pin`, nicht an
+`/v1/models/load`, nicht an die Downloads und nicht an die Telemetrie; auch
+Ladeoptionen (Kontextfenster, GPU) kann es nicht setzen. Ein Werkzeug soll dir kein Modell aus dem Speicher werfen, während
 du am Telefon damit arbeitest. Umgekehrt öffnet das App-Token die
 Agenten-Oberfläche nicht.
 

@@ -9,6 +9,7 @@ import '../data/chat_store.dart';
 import '../data/gateway_client.dart';
 import '../data/token_budget.dart';
 import '../models/chat.dart';
+import '../models/load_settings.dart';
 import '../models/model_entry.dart';
 import 'compaction.dart';
 
@@ -79,6 +80,7 @@ class ChatController extends StateNotifier<ChatSession> {
     required GatewayClient client,
     required Map<String, ModelCalibration> calibrations,
     this.onCalibrationSaved,
+    this.loadFor,
   })  : _store = store,
         _client = client,
         _calibrations = {...calibrations},
@@ -91,6 +93,11 @@ class ChatController extends StateNotifier<ChatSession> {
   final GatewayClient _client;
   final Map<String, ModelCalibration> _calibrations;
   final void Function(String key, ModelCalibration value)? onCalibrationSaved;
+
+  /// Ladeoptionen des Modells zum Zeitpunkt des Sendens. Eine Funktion statt
+  /// eines Werts: die Einstellungen können sich ändern, während der Chat
+  /// offen ist, und der Controller soll dafür nicht neu gebaut werden.
+  final LoadSettings Function(ModelRef ref)? loadFor;
 
   late final ContextCompactor _compactor;
   static const _uuid = Uuid();
@@ -303,6 +310,9 @@ class ChatController extends StateNotifier<ChatSession> {
           ref: ref,
           messages: payload,
           research: state.chat.researchEnabled,
+          temperature: state.chat.temperature,
+          think: state.chat.think.wire,
+          load: loadFor?.call(ref).forChat(ref.backend),
         )
         .listen(_onEvent, onError: (Object e) => _fail('$e'), onDone: _onDone);
   }
@@ -577,6 +587,21 @@ class ChatController extends StateNotifier<ChatSession> {
       ));
     }
     await _startRun(ref);
+  }
+
+  /// `null` setzt auf die Vorgabe des Modells zurück.
+  Future<void> setTemperature(double? value) async {
+    final chat = value == null
+        ? state.chat.copyWith(clearTemperature: true, updatedAt: DateTime.now())
+        : state.chat.copyWith(temperature: value, updatedAt: DateTime.now());
+    await _store.upsertChat(chat);
+    state = state.copyWith(chat: chat);
+  }
+
+  Future<void> setThink(ThinkMode mode) async {
+    final chat = state.chat.copyWith(think: mode, updatedAt: DateTime.now());
+    await _store.upsertChat(chat);
+    state = state.copyWith(chat: chat);
   }
 
   /// Leerer Text entfernt den Systemprompt.

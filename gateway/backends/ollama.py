@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from datetime import datetime
 from typing import Any, AsyncIterator
@@ -21,6 +22,8 @@ from ..schema import (
     ChatMetrics,
     ChatRequest,
     Fact,
+    GpuMode,
+    LoadOptions,
     ModelEntry,
     ModelKind,
     ModelState,
@@ -37,6 +40,55 @@ from .base import (
     Status,
     ToolCalls,
 )
+
+#: Bytes pro Wert im KV-Cache, je nach OLLAMA_KV_CACHE_TYPE.
+_KV_BYTES = {"f16": 2.0, "q8_0": 1.0, "q4_0": 0.5}
+
+
+def kv_bytes_per_token(info: dict[str, Any]) -> Fact[int]:
+    """Speicherbedarf eines Tokens Kontext, aus den Architekturdaten.
+
+    2 (Key und Value) x Schichten x KV-Koepfe x Kopfgroesse x Bytes pro Wert.
+    Bei Modellen mit Sliding-Window- oder linearer Aufmerksamkeit (Gemma,
+    Qwen3-Next) ist das eine Obergrenze - dort cachen nicht alle Schichten
+    den vollen Kontext.
+    """
+    arch = info.get("general.architecture")
+    if not arch:
+        return Fact.unknown_because("model_info nennt keine Architektur")
+
+    def wert(key: str) -> Any:
+        return info.get(f"{arch}.{key}")
+
+    layers = wert("block_count")
+    kv_heads = wert("attention.head_count_kv")
+    heads = wert("attention.head_count")
+    k_len = wert("attention.key_length")
+    v_len = wert("attention.value_length")
+    if (k_len is None or v_len is None) and heads and wert("embedding_length"):
+        k_len = v_len = int(wert("embedding_length")) // int(
+            heads if not isinstance(heads, list) else max(heads)
+        )
+    if kv_heads is None:
+        kv_heads = heads
+    if not isinstance(layers, int) or kv_heads is None or not k_len or not v_len:
+        return Fact.unknown_because(
+            f"Architektur {arch}: Schichten oder KV-Koepfe fehlen in model_info"
+        )
+
+    # Manche Architekturen geben die KV-Koepfe pro Schicht an.
+    koepfe_gesamt = (
+        sum(int(k) for k in kv_heads)
+        if isinstance(kv_heads, list)
+        else int(kv_heads) * layers
+    )
+    cache_typ = os.getenv("OLLAMA_KV_CACHE_TYPE", "f16").strip().lower() or "f16"
+    pro_wert = _KV_BYTES.get(cache_typ, 2.0)
+    return Fact[int](
+        value=int(koepfe_gesamt * (int(k_len) + int(v_len)) * pro_wert),
+        note=f"geschaetzt, KV-Cache {cache_typ}",
+    )
+
 
 _NO_CAPS_NOTE = (
     "Diese Ollama-Version liefert kein capabilities-Feld in /api/show; "
@@ -197,6 +249,7 @@ class OllamaBackend(Backend):
         tools = Fact[bool].unknown_because(_NO_CAPS_NOTE)
         thinking = Fact[bool].unknown_because(_NO_CAPS_NOTE)
         ctx_len = Fact[int].unknown_because("/api/show nicht abrufbar")
+        kv = Fact[int].unknown_because("/api/show nicht abrufbar")
 
         if detail is not None:
             caps = detail.get("capabilities")
@@ -210,6 +263,7 @@ class OllamaBackend(Backend):
             ctx_len = Fact.maybe(
                 ctx_value, "context_length nicht in model_info enthalten"
             )
+            kv = kv_bytes_per_token(info)
 
         kind = ModelKind.unknown
         if vision.value is True:
@@ -235,6 +289,7 @@ class OllamaBackend(Backend):
             vram_fraction=fraction,
             context_length=ctx_len,
             loaded_context_length=loaded_ctx,
+            kv_bytes_per_token=kv,
             unloads_at=expires,
             vision=vision,
             tools=tools,
@@ -320,6 +375,10 @@ class OllamaBackend(Backend):
             options["presence_penalty"] = req.presence_penalty
         if req.frequency_penalty is not None:
             options["frequency_penalty"] = req.frequency_penalty
+        if req.load is not None:
+            options.update(self._load_options(req.load))
+            if req.load.keep_alive is not None:
+                payload["keep_alive"] = req.load.keep_alive
         if options:
             payload["options"] = options
         if req.json_mode:
@@ -471,6 +530,67 @@ class OllamaBackend(Backend):
             raise BackendError(
                 f"keep_alive fehlgeschlagen ({res.status_code}): {res.text[:200]}"
             )
+
+    @staticmethod
+    def _load_options(opts: LoadOptions) -> dict[str, Any]:
+        """Ladeoptionen als Ollama-``options``.
+
+        Ein anderes ``num_ctx`` als das geladene laesst Ollama das Modell neu
+        laden - das ist gewollt, dauert aber; die App zeigt dann "Modell wird
+        geladen".
+        """
+        out: dict[str, Any] = {}
+        if opts.context_length is not None:
+            out["num_ctx"] = opts.context_length
+        if opts.gpu is GpuMode.max:
+            # Mehr Schichten, als ein Modell hat: Ollama nimmt alle.
+            out["num_gpu"] = 999
+        elif opts.gpu is GpuMode.off:
+            out["num_gpu"] = 0
+        return out
+
+    async def load(self, model: str, opts: LoadOptions) -> None:
+        # Ein generate-Request ohne Prompt laedt nur. Er kehrt zurueck, wenn
+        # das Modell im Speicher ist.
+        payload: dict[str, Any] = {"model": model}
+        options = self._load_options(opts)
+        if options:
+            payload["options"] = options
+        if opts.keep_alive is not None:
+            payload["keep_alive"] = opts.keep_alive
+        res = await self.http.post(self._url("/api/generate"), json=payload)
+        if res.status_code != 200:
+            raise BackendError(
+                f"Laden fehlgeschlagen ({res.status_code}): {res.text[:300]}"
+            )
+
+    async def pull(self, model: str) -> AsyncIterator[dict[str, Any]]:
+        """Laedt ein Modell aus der Ollama-Bibliothek herunter.
+
+        Liefert die Fortschrittszeilen von Ollama unveraendert. Bricht der
+        Aufrufer ab, schliesst die Verbindung, und Ollama stoppt - bereits
+        geladene Teile bleiben liegen, ein neuer Versuch setzt dort fort.
+        """
+        async with self.http.stream(
+            "POST",
+            self._url("/api/pull"),
+            json={"model": model, "stream": True},
+            # Zwischen zwei Zeilen kann bei einem langsamen Spiegel lange
+            # nichts kommen; der Gesamtvorgang dauert ohnehin Minuten.
+            timeout=httpx.Timeout(30.0, read=300.0),
+        ) as res:
+            if res.status_code != 200:
+                body = (await res.aread()).decode(errors="replace")
+                raise BackendError(
+                    f"Ollama antwortete {res.status_code}: {body[:300]}"
+                )
+            async for line in res.aiter_lines():
+                if not line.strip():
+                    continue
+                try:
+                    yield json.loads(line)
+                except json.JSONDecodeError:
+                    continue
 
     async def _get_json(self, path: str) -> dict[str, Any]:
         res = await self.http.get(self._url(path), timeout=15)

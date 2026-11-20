@@ -12,7 +12,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Generic, Optional, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 T = TypeVar("T")
 
@@ -87,6 +87,9 @@ class ModelEntry(BaseModel):
 
     context_length: Fact[int] = Field(default_factory=Fact)
     loaded_context_length: Fact[int] = Field(default_factory=Fact)
+    #: Speicher, den ein Token Kontext im KV-Cache belegt. Damit schaetzt die
+    #: App vor dem Laden, was ein groesseres Kontextfenster kostet.
+    kv_bytes_per_token: Fact[int] = Field(default_factory=Fact)
     unloads_at: Fact[datetime] = Field(default_factory=Fact)
 
     vision: Fact[bool] = Field(default_factory=Fact)
@@ -109,6 +112,12 @@ class GatewayHealth(BaseModel):
     hostname: str
     gateway_version: str
     backends: list[BackendHealth]
+    #: Ob ``/v1/models/pull`` eingeschaltet ist - die App blendet den
+    #: Download sonst aus, statt einen Knopf anzubieten, der nur 403 liefert.
+    pull_enabled: bool = False
+    #: Obergrenze fuer das Kontextfenster (``GATEWAY_MAX_CONTEXT``), ``None``
+    #: heisst: nur die des Modells.
+    max_context: Optional[int] = None
 
 
 class GpuSample(BaseModel):
@@ -163,6 +172,52 @@ class ChatMessage(BaseModel):
     tool_name: Optional[str] = None
 
 
+class GpuMode(str, Enum):
+    #: Backend entscheidet - der Normalfall.
+    auto = "auto"
+    #: So viel wie moeglich auf die Grafikkarte.
+    max = "max"
+    #: Nur CPU: langsam, aber passt immer, und die GPU bleibt frei.
+    off = "off"
+
+
+#: Laengste Haltedauer ausser "dauerhaft". Wer laenger will, pinnt.
+MAX_KEEP_ALIVE_S = 7 * 24 * 3600
+
+
+class LoadOptions(BaseModel):
+    """Wie ein Modell geladen werden soll.
+
+    Bewusst eine feste, kleine Liste statt durchgereichter Backend-Optionen:
+    die App bestimmt, *wie viel* Speicher ein Modell bekommt, aber sie kann
+    dem Backend keine beliebigen Schalter setzen.
+    """
+
+    #: Kontextfenster in Tokens. ``None``: Vorgabe des Backends.
+    context_length: Optional[int] = Field(default=None, ge=512, le=2_000_000)
+    #: Sekunden im Speicher nach der letzten Anfrage. ``-1`` dauerhaft,
+    #: ``0`` sofort entladen, ``None`` Vorgabe des Backends.
+    keep_alive: Optional[int] = None
+    gpu: GpuMode = GpuMode.auto
+
+    @field_validator("keep_alive")
+    @classmethod
+    def _haltedauer(cls, v: Optional[int]) -> Optional[int]:
+        if v is None or v == -1 or 0 <= v <= MAX_KEEP_ALIVE_S:
+            return v
+        raise ValueError(
+            f"keep_alive muss -1 (dauerhaft) oder 0..{MAX_KEEP_ALIVE_S} Sekunden sein"
+        )
+
+    @property
+    def is_default(self) -> bool:
+        return (
+            self.context_length is None
+            and self.keep_alive is None
+            and self.gpu is GpuMode.auto
+        )
+
+
 class ChatRequest(BaseModel):
     backend: BackendId
     model: str
@@ -193,10 +248,45 @@ class ChatRequest(BaseModel):
     #: mit leerem ``content``.
     think: Optional[bool] = None
 
+    #: Ladeoptionen fuer dieses Modell. Nur ueber die App-API erreichbar - die
+    #: OpenAI-Oberflaeche fuer Agenten setzt das Feld nie.
+    load: Optional[LoadOptions] = None
+
 
 class ModelRef(BaseModel):
     backend: BackendId
     model: str
+
+
+class LoadRequest(ModelRef):
+    load: LoadOptions = Field(default_factory=LoadOptions)
+
+
+class PullRequest(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+
+
+class PullState(str, Enum):
+    running = "running"
+    done = "done"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class PullJob(BaseModel):
+    """Ein Download, wie ihn die App anzeigt."""
+
+    model: str
+    state: PullState
+    #: Letzte Statuszeile von Ollama, z. B. "pulling manifest".
+    status: str = ""
+    completed: int = 0
+    #: ``None``, solange Ollama die Groesse noch nicht genannt hat - eine
+    #: erfundene Null wuerde als "fertig" gelesen.
+    total: Optional[int] = None
+    error: Optional[str] = None
+    started_at: datetime
+    finished_at: Optional[datetime] = None
 
 
 class ChatMetrics(BaseModel):

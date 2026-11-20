@@ -67,6 +67,14 @@ class Config:
     #: Mit Vorgabewert, damit bestehende Aufrufer weiterlaufen.
     research_max_bytes: int = 2 * 1024 * 1024
 
+    #: Modelle ueber die App herunterladen lassen (nur Ollama).
+    allow_pull: bool = False
+
+    #: Obergrenze fuer das Kontextfenster, das die App anfordern darf. 0 heisst:
+    #: nur die Grenze des Modells. Ein zu grosses Fenster legt den KV-Cache in
+    #: den Arbeitsspeicher, und der Desktop wird zaeh.
+    max_context: int = 0
+
     @classmethod
     def from_env(cls) -> "Config":
         _load_env_file()
@@ -96,6 +104,9 @@ class Config:
             research_max_bytes=int(
                 os.getenv("GATEWAY_RESEARCH_MAX_BYTES", str(2 * 1024 * 1024))
             ),
+            allow_pull=os.getenv("GATEWAY_ALLOW_PULL", "").strip().lower()
+            in ("1", "true", "ja", "an"),
+            max_context=int(os.getenv("GATEWAY_MAX_CONTEXT", "0") or 0),
         )
 
     def check(self) -> None:

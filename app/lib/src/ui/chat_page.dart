@@ -163,6 +163,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                     child: const Text('Kontext verdichten'),
                   ),
                   const PopupMenuDivider(),
+                  const PopupMenuItem(
+                    value: 'behaviour',
+                    child: Text('Antwortverhalten …'),
+                  ),
                   PopupMenuItem(
                     value: 'system',
                     child: Text(
@@ -377,6 +381,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         await _controller.setResearch(!session.chat.researchEnabled);
       case 'compress':
         await _controller.setCompression(!session.chat.compressionEnabled);
+      case 'behaviour':
+        await showModalBottomSheet<void>(
+          context: context,
+          isScrollControlled: true,
+          builder: (_) => _BehaviourSheet(chat: widget.chat),
+        );
       case 'system':
         await _editSystemPrompt(session);
       case 'rename':
@@ -984,6 +994,106 @@ class _Freigabe extends StatelessWidget {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+
+/// Temperatur und Denkschritte für diesen Chat. Änderungen gelten sofort für
+/// die nächste Anfrage.
+class _BehaviourSheet extends ConsumerWidget {
+  const _BehaviourSheet({required this.chat});
+
+  final Chat chat;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final session = ref.watch(chatControllerProvider(chat));
+    final controller = ref.read(chatControllerProvider(chat).notifier);
+    final current = session.chat;
+    final temp = current.temperature;
+    final thinking = session.entry?.thinking.value;
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Antwortverhalten',
+              style: TextStyle(
+                  fontSize: 15, fontWeight: FontWeight.w600, color: Tone.ink),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Gilt nur für diesen Chat.',
+              style: TextStyle(fontSize: 11.5, color: Tone.faint),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                const Expanded(
+                  child: Text('Temperatur',
+                      style: TextStyle(fontSize: 13, color: Tone.ink)),
+                ),
+                Text(
+                  temp == null ? 'Vorgabe des Modells' : temp.toStringAsFixed(1),
+                  style: kMono.copyWith(fontSize: 12.5, color: Tone.muted),
+                ),
+                Switch(
+                  value: temp != null,
+                  onChanged: (on) => controller.setTemperature(on ? 0.7 : null),
+                ),
+              ],
+            ),
+            if (temp != null) ...[
+              Slider(
+                value: temp.clamp(0, 2),
+                min: 0,
+                max: 2,
+                divisions: 20,
+                label: temp.toStringAsFixed(1),
+                onChanged: (v) => controller.setTemperature(
+                    double.parse(v.toStringAsFixed(1))),
+              ),
+              const Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('genau, wiederholbar',
+                      style: TextStyle(fontSize: 11, color: Tone.faint)),
+                  Text('einfallsreich, sprunghaft',
+                      style: TextStyle(fontSize: 11, color: Tone.faint)),
+                ],
+              ),
+            ],
+            const SizedBox(height: 18),
+            const Text('Denkschritte',
+                style: TextStyle(fontSize: 13, color: Tone.ink)),
+            const SizedBox(height: 8),
+            SegmentedButton<ThinkMode>(
+              showSelectedIcon: false,
+              segments: [
+                for (final m in ThinkMode.values)
+                  ButtonSegment(value: m, label: Text(m.label)),
+              ],
+              selected: {current.think},
+              onSelectionChanged: (s) => controller.setThink(s.first),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              thinking == false
+                  ? 'Dieses Modell denkt nicht in getrennten Schritten — die '
+                      'Einstellung hat hier keine Wirkung.'
+                  : '„Aus" antwortet bei Reasoning-Modellen deutlich schneller, '
+                      'dafür bei kniffligen Fragen weniger gründlich.',
+              style: const TextStyle(
+                  fontSize: 11.5, color: Tone.faint, height: 1.4),
+            ),
+          ],
+        ),
       ),
     );
   }
