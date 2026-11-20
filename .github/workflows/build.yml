@@ -194,11 +194,19 @@ jobs:
         id: cert
         run: |
           APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner"
-          SHA="$("$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk \
-            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
-          [ -n "$SHA" ] || { echo "::error::APK ist nicht signiert"; exit 1; }
-          echo "Zertifikat SHA-256: $SHA"
-          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          AUSGABE="$("$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk)"
+          # Je nach Version heisst die Zeile "Signer #1 certificate ..." oder
+          # "Signer (minSdkVersion=...) certificate ..." - nur das Ende ist fest.
+          SHA="$(grep -m1 'certificate SHA-256 digest:' <<< "$AUSGABE" | sed 's/.*digest: *//')"
+          DN="$(grep -m1 'certificate DN:' <<< "$AUSGABE" | sed 's/.*DN: *//')"
+          [ -n "$SHA" ] || { echo "$AUSGABE"; echo "::error::Kein Signaturzertifikat gefunden"; exit 1; }
+          # Play Console und keytool schreiben ihn gross und mit Doppelpunkten.
+          MIT_DOPPELPUNKT="$(tr 'a-f' 'A-F' <<< "$SHA" | sed 's/../&:/g; s/:$//')"
+          echo "Zertifikat:          $DN"
+          echo "SHA-256:             $SHA"
+          echo "SHA-256 (Play):      $MIT_DOPPELPUNKT"
+          echo "::notice title=Signaturzertifikat SHA-256::$MIT_DOPPELPUNKT ($DN)"
+          echo "sha256=$MIT_DOPPELPUNKT" >> "$GITHUB_OUTPUT"
       # Laeufer sind Wegwerfmaschinen, aber der Schluessel soll keinen
       # Schritt laenger existieren als noetig.
       - name: Schluessel entfernen
