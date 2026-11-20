@@ -579,6 +579,15 @@ class ChatController extends StateNotifier<ChatSession> {
     await _startRun(ref);
   }
 
+  /// Leerer Text entfernt den Systemprompt.
+  Future<void> setSystemPrompt(String text) async {
+    final chat =
+        state.chat.copyWith(systemPrompt: text, updatedAt: DateTime.now());
+    await _store.upsertChat(chat);
+    state = state.copyWith(chat: chat);
+    _recomputeBudget();
+  }
+
   Future<void> setResearch(bool enabled) async {
     final chat = state.chat
         .copyWith(researchEnabled: enabled, updatedAt: DateTime.now());

@@ -64,17 +64,71 @@ LM Studio muss laufen (`lms server start` oder GUI mit aktivem Server).
 **App**
 
 Fertige Builds hängen unter *Releases* am Repo: `lokal-ai-vX.Y.Z.apk` fürs
-Telefon, `lokal-ai-vX.Y.Z-windows.zip` für den Desktop. Die APK ist mit
-Flutters Debug-Schlüssel signiert — Android fragt nach „Unbekannten Quellen",
-und ein Update aus einem anderen Build lässt sich eventuell nur nach
-Deinstallation einspielen. Ein neues Release entsteht entweder mit einem Tag
+Telefon, `lokal-ai-vX.Y.Z.aab` für Google Play, `lokal-ai-vX.Y.Z-windows.zip`
+für den Desktop. Ein neues Release entsteht entweder mit einem Tag
 
 ```bash
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
 oder ohne Tag unter *Actions → build → Run workflow* mit der Version im Feld
-`release` — der Tag wird dann auf GitHub angelegt.
+`release` — der Tag wird dann auf GitHub angelegt. Der `versionCode` kommt aus
+der Laufnummer der Action und steigt damit von selbst, wie Google Play es
+verlangt.
+
+### Signierung mit eigenem Schlüssel
+
+Releases werden mit einem eigenen **Upload-Schlüssel** signiert; ohne ihn
+bricht der Release-Lauf ab, statt eine APK mit Debug-Schlüssel zu
+veröffentlichen (die ließe sich nie als Update über eine signierte Version
+installieren). Normale Läufe ohne Secrets — etwa Pull Requests aus Forks —
+bauen weiter mit dem Debug-Schlüssel.
+
+Schlüssel einmalig erzeugen und **sicher aufbewahren** (Passwortmanager) —
+geht er verloren, kann man ihn bei Google Play zwar zurücksetzen lassen, aber
+Sideload-Installationen lassen sich dann nur noch nach Deinstallation
+aktualisieren:
+
+```bash
+keytool -genkeypair -v -keystore upload.jks -storetype PKCS12 \
+  -keyalg RSA -keysize 4096 -validity 10000 -alias upload
+base64 -w0 upload.jks > upload.jks.b64     # macOS: base64 -i upload.jks
+```
+
+Unter *Settings → Secrets and variables → Actions* anlegen:
+
+| Secret | Inhalt |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64` | Inhalt von `upload.jks.b64` |
+| `ANDROID_KEYSTORE_PASSWORD` | Keystore-Passwort |
+| `ANDROID_KEY_ALIAS` | `upload` (bzw. der gewählte Alias) |
+| `ANDROID_KEY_PASSWORD` | Schlüsselpasswort — bei PKCS12 dasselbe, darf dann fehlen |
+| `PLAY_SERVICE_ACCOUNT_JSON` | *optional*: JSON eines Dienstkontos mit Zugriff in der Play Console |
+
+Mit `PLAY_SERVICE_ACCOUNT_JSON` lädt ein Release das App Bundle zusätzlich als
+**Entwurf in die interne Testspur** hoch; freigegeben wird in der Play Console.
+Den allerersten Upload einer App nimmt die Play-API nicht an — die erste
+`.aab` aus dem Release also einmal von Hand hochladen. In der Play Console
+*App-Signatur durch Google Play* aktiv lassen: Google signiert die
+ausgelieferte App mit seinem eigenen Schlüssel, der Upload-Schlüssel oben
+weist nur nach, dass der Upload von dir kommt.
+
+Die Paket-ID ist `de.nicolas.local_ai_remote` (aus `flutter create --org
+de.nicolas`) und lässt sich nach dem ersten Play-Upload nicht mehr ändern.
+
+Lokal signiert `android/key.properties` (nicht eingecheckt):
+
+```properties
+storeFile=/pfad/zu/upload.jks
+storePassword=...
+keyAlias=upload
+keyPassword=...
+```
+
+Eingebunden wird beides über `app/android/app/signing.gradle`; die CI hängt
+an das von `flutter create` erzeugte Build-Skript nur eine `apply`-Zeile an.
+Lokal dieselbe Zeile ans Ende von `android/app/build.gradle.kts` setzen:
+`apply(from = "signing.gradle")`.
 
 Selbst bauen:
 

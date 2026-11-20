@@ -1,0 +1,71 @@
+// Release-Signierung mit dem eigenen Upload-Schlüssel.
+//
+// Liegt als eigene Datei im Repo, weil `build.gradle(.kts)` von
+// `flutter create` erzeugt wird und nicht eingecheckt ist. Die CI haengt an
+// das erzeugte Skript nur eine Zeile an, die diese Datei einbindet - so
+// ueberlebt die Signierung jeden Versionssprung der Flutter-Vorlage.
+//
+// Quelle der Schluesseldaten, in dieser Reihenfolge:
+//   1. android/key.properties (lokal, nie einchecken)
+//   2. Umgebungsvariablen ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD,
+//      ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD (CI)
+//
+// Fehlt beides, bleibt es bei der Debug-Signierung der Vorlage. Mit
+// REQUIRE_RELEASE_SIGNING=1 bricht der Build stattdessen ab - ein Release mit
+// Debug-Schluessel liesse sich nie als Update ueber eine Play-Version
+// installieren, und das merkt man sonst erst auf dem Telefon.
+
+def keyProps = new Properties()
+def keyFile = rootProject.file('key.properties')
+if (keyFile.exists()) {
+    keyFile.withInputStream { keyProps.load(it) }
+}
+
+def pick = { String prop, String env ->
+    def v = keyProps.getProperty(prop) ?: System.getenv(env)
+    return (v == null || v.trim().isEmpty()) ? null : v.trim()
+}
+
+def storePath = pick('storeFile', 'ANDROID_KEYSTORE_PATH')
+def storePass = pick('storePassword', 'ANDROID_KEYSTORE_PASSWORD')
+def alias = pick('keyAlias', 'ANDROID_KEY_ALIAS')
+// Bei PKCS12-Keystores (Standard von keytool) sind beide Passwoerter gleich.
+def keyPass = pick('keyPassword', 'ANDROID_KEY_PASSWORD') ?: storePass
+
+def complete = storePath && storePass && alias && keyPass
+
+if (!complete) {
+    if (System.getenv('REQUIRE_RELEASE_SIGNING') == '1') {
+        throw new GradleException(
+            'Release-Signierung verlangt, aber Schluesseldaten fehlen. ' +
+            'Benoetigt: ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, ' +
+            'ANDROID_KEY_ALIAS (und ggf. ANDROID_KEY_PASSWORD) oder ' +
+            'android/key.properties.')
+    }
+    logger.lifecycle('signing.gradle: keine Schluesseldaten - Release wird mit dem Debug-Schluessel signiert.')
+    return
+}
+
+def store = rootProject.file(storePath)
+if (!store.exists()) store = file(storePath)
+if (!store.exists()) {
+    throw new GradleException("Keystore nicht gefunden: ${storePath}")
+}
+
+android {
+    signingConfigs {
+        upload {
+            storeFile store
+            storePassword storePass
+            keyAlias alias
+            keyPassword keyPass
+        }
+    }
+    buildTypes {
+        release {
+            signingConfig signingConfigs.upload
+        }
+    }
+}
+
+logger.lifecycle("signing.gradle: Release wird mit Schluessel '${alias}' signiert.")

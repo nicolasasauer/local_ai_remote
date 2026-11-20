@@ -407,59 +407,135 @@ Future<ModelRef?> showModelPicker(
   ModelRef? current,
 }) {
   final snapshot = ref.read(modelsProvider).valueOrNull;
-  final models = snapshot?.selectable ?? const <ModelEntry>[];
+  final models = [...(snapshot?.selectable ?? const <ModelEntry>[])]
+    // Geladene Modelle zuerst: sie antworten sofort, alle anderen müssen erst
+    // in den Speicher.
+    ..sort((a, b) {
+      if (a.isLoaded != b.isLoaded) return a.isLoaded ? -1 : 1;
+      return a.label.toLowerCase().compareTo(b.label.toLowerCase());
+    });
 
   return showModalBottomSheet<ModelRef>(
     context: context,
-    backgroundColor: Tone.surface,
     isScrollControlled: true,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
     ),
-    builder: (context) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Padding(
-            padding: EdgeInsets.fromLTRB(18, 16, 18, 6),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                'Modell für diesen Chat',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  color: Tone.ink,
+    builder:
+        (context) => ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * 0.85,
+          ),
+          child: _ModelPickerSheet(
+            models: models,
+            current: current,
+            gatewayError: snapshot?.gatewayError,
+          ),
+        ),
+  );
+}
+
+class _ModelPickerSheet extends StatefulWidget {
+  const _ModelPickerSheet({
+    required this.models,
+    required this.current,
+    required this.gatewayError,
+  });
+
+  final List<ModelEntry> models;
+  final ModelRef? current;
+  final String? gatewayError;
+
+  @override
+  State<_ModelPickerSheet> createState() => _ModelPickerSheetState();
+}
+
+class _ModelPickerSheetState extends State<_ModelPickerSheet> {
+  String _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final q = _query.trim().toLowerCase();
+    final visible =
+        q.isEmpty
+            ? widget.models
+            : widget.models
+                .where(
+                  (m) =>
+                      m.label.toLowerCase().contains(q) ||
+                      m.id.toLowerCase().contains(q),
+                )
+                .toList();
+
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(18, 0, 18, 6),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Modell für diesen Chat',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: Tone.ink,
+                  ),
                 ),
               ),
             ),
-          ),
-          if (models.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(18),
-              child: Text(
-                'Keine Modelle verfügbar. Läuft das Gateway, und sind Ollama '
-                'oder LM Studio gestartet?',
-                style: TextStyle(fontSize: 13, color: Tone.muted, height: 1.45),
+            if (widget.models.length > 6)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 4, 14, 6),
+                child: TextField(
+                  onChanged: (v) => setState(() => _query = v),
+                  style: const TextStyle(fontSize: 13),
+                  decoration: const InputDecoration(
+                    hintText: 'Modell suchen',
+                    hintStyle: TextStyle(color: Tone.faint),
+                    prefixIcon: Icon(Icons.search, size: 17),
+                  ),
+                ),
+              ),
+            if (widget.models.isEmpty)
+              Padding(
+                padding: const EdgeInsets.all(18),
+                child: Text(
+                  widget.gatewayError != null
+                      ? 'Gateway nicht erreichbar: ${widget.gatewayError}'
+                      : 'Keine Modelle verfügbar. Sind Ollama oder LM Studio '
+                          'gestartet?',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: Tone.muted,
+                    height: 1.45,
+                  ),
+                ),
+              ),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                padding: const EdgeInsets.only(bottom: 8),
+                children: [
+                  for (final model in visible)
+                    ModelTile(
+                      model: model,
+                      selected: model.ref == widget.current,
+                      onTap: () => Navigator.of(context).pop(model.ref),
+                    ),
+                ],
               ),
             ),
-          Flexible(
-            child: ListView(
-              shrinkWrap: true,
-              children: [
-                for (final model in models)
-                  ModelTile(
-                    model: model,
-                    selected: model.ref == current,
-                    onTap: () => Navigator.of(context).pop(model.ref),
-                  ),
-              ],
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _SectionHeader extends StatelessWidget {

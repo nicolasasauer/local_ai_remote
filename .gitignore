@@ -12,6 +12,9 @@ app/android/*
 !app/android/app/
 app/android/app/*
 !app/android/app/src/
+# Release-Signierung: wird von der CI in das erzeugte build.gradle(.kts)
+# eingebunden, siehe app/android/app/signing.gradle.
+!app/android/app/signing.gradle
 app/android/app/src/*
 !app/android/app/src/main/
 app/android/app/src/main/*

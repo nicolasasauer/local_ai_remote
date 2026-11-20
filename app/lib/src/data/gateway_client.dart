@@ -311,6 +311,11 @@ class GatewayClient {
   /// (Backoff, letzter Stand) an einer Stelle liegt.
   Stream<TelemetrySample> telemetry() {
     final channel = WebSocketChannel.connect(telemetryUri());
+    // Ein Fehlschlag beim Verbinden kommt zweimal: über `ready` und über den
+    // Stream. Ohne Abnehmer für `ready` landet er als unbehandelter Fehler in
+    // der Zone — bei jedem Reconnect-Versuch, solange der Desktop schläft.
+    // Behandelt wird er über den Stream, beim Aufrufer.
+    channel.ready.ignore();
     return channel.stream.map((raw) => TelemetrySample.fromJson(
         jsonDecode(raw as String) as Map<String, dynamic>));
   }

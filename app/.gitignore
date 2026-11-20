@@ -43,3 +43,9 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Signierschluessel - niemals einchecken. Die CI legt beides zur Laufzeit aus
+# GitHub-Secrets an.
+/android/key.properties
+*.jks
+*.keystore

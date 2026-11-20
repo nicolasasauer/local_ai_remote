@@ -140,16 +140,32 @@ class BackendError {
 
 /// Momentaufnahme der Modellliste. Ein Fehler ist hier ein Zustand, kein
 /// Abbruch — "Gateway weg" und "Backend weg" sind verschiedene Dinge.
+/// Marker: es ist noch keine Gateway-Adresse gesetzt.
+class GatewayNotConfigured {
+  const GatewayNotConfigured();
+  @override
+  String toString() => 'Keine Gateway-Adresse gesetzt';
+}
+
 class ModelsSnapshot {
   const ModelsSnapshot({
     this.models = const [],
     this.backendErrors = const [],
     this.gatewayError,
+    this.gatewayErrorCause,
   });
 
   final List<ModelEntry> models;
   final List<BackendError> backendErrors;
   final String? gatewayError;
+
+  /// Die ursprüngliche Ausnahme — damit die Oberfläche einen 401 von einem
+  /// abgeschalteten Desktop unterscheiden kann, statt nur Text zu haben.
+  final Object? gatewayErrorCause;
+
+  /// Gateway gar nicht eingerichtet — etwas anderes als "eingerichtet, aber
+  /// nicht erreichbar".
+  bool get notConfigured => gatewayErrorCause is GatewayNotConfigured;
 
   bool get gatewayReachable => gatewayError == null;
 

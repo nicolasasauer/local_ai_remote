@@ -105,10 +105,67 @@ ThemeData buildTheme() {
       selectedLabelTextStyle: const TextStyle(color: Tone.ink, fontSize: 12),
       unselectedLabelTextStyle: const TextStyle(color: Tone.muted, fontSize: 12),
     ),
-    snackBarTheme: const SnackBarThemeData(
+    snackBarTheme: SnackBarThemeData(
       backgroundColor: Tone.raised,
-      contentTextStyle: TextStyle(color: Tone.ink),
+      contentTextStyle: const TextStyle(color: Tone.ink),
       behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+    ),
+    popupMenuTheme: PopupMenuThemeData(
+      color: Tone.raised,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: const BorderSide(color: Tone.hairline),
+      ),
+      textStyle: const TextStyle(fontSize: 13.5, color: Tone.ink),
+    ),
+    dialogTheme: DialogThemeData(
+      backgroundColor: Tone.raised,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+    ),
+    bottomSheetTheme: const BottomSheetThemeData(
+      backgroundColor: Tone.surface,
+      surfaceTintColor: Colors.transparent,
+      showDragHandle: true,
+      dragHandleColor: Tone.faint,
+    ),
+    tooltipTheme: TooltipThemeData(
+      decoration: BoxDecoration(
+        color: Tone.raised,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Tone.hairline),
+      ),
+      textStyle: const TextStyle(fontSize: 12, color: Tone.ink),
+      waitDuration: const Duration(milliseconds: 500),
+    ),
+    scrollbarTheme: ScrollbarThemeData(
+      thumbColor: WidgetStatePropertyAll(Tone.faint.withValues(alpha: 0.6)),
+      radius: const Radius.circular(4),
+      thickness: const WidgetStatePropertyAll(6),
+    ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
+        textStyle: const TextStyle(fontWeight: FontWeight.w600),
+      ),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(
+        side: const BorderSide(color: Tone.hairline),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
+      ),
+    ),
+    drawerTheme: const DrawerThemeData(
+      backgroundColor: Tone.surface,
+      surfaceTintColor: Colors.transparent,
+    ),
+    pageTransitionsTheme: const PageTransitionsTheme(
+      builders: {
+        TargetPlatform.android: FadeForwardsPageTransitionsBuilder(),
+        TargetPlatform.windows: FadeForwardsPageTransitionsBuilder(),
+      },
     ),
   );
 }

@@ -72,7 +72,10 @@ final gatewayClientProvider = Provider<GatewayClient>((ref) {
 final modelsProvider = StreamProvider<ModelsSnapshot>((ref) async* {
   final client = ref.watch(gatewayClientProvider);
   if (!client.isConfigured) {
-    yield const ModelsSnapshot(gatewayError: 'Keine Gateway-Adresse gesetzt');
+    yield const ModelsSnapshot(
+      gatewayError: 'Keine Gateway-Adresse gesetzt',
+      gatewayErrorCause: GatewayNotConfigured(),
+    );
     return;
   }
 
@@ -80,7 +83,7 @@ final modelsProvider = StreamProvider<ModelsSnapshot>((ref) async* {
     try {
       yield await client.models();
     } catch (e) {
-      yield ModelsSnapshot(gatewayError: '$e');
+      yield ModelsSnapshot(gatewayError: '$e', gatewayErrorCause: e);
     }
     await Future<void>.delayed(const Duration(seconds: 3));
   }
@@ -183,16 +186,47 @@ class ChatListController extends StateNotifier<List<Chat>> {
     await _store.deleteChat(id);
     await refresh();
   }
+
+  Future<void> rename(String id, String title) async {
+    final chat = state.where((c) => c.id == id).firstOrNull;
+    if (chat == null) return;
+    await _store.upsertChat(
+        chat.copyWith(title: title, updatedAt: DateTime.now()));
+    await refresh();
+  }
+
+  /// Das zuletzt benutzte Modell — damit ein neuer Chat nicht jedes Mal
+  /// eine Auswahl verlangt. Die Liste ist nach `updated_at` sortiert.
+  ModelRef? get lastModel => state.map((c) => c.model).nonNulls.firstOrNull;
 }
 
 final chatListProvider =
     StateNotifierProvider<ChatListController, List<Chat>>(
         (ref) => ChatListController(ref.watch(storeProvider)));
 
-final activeChatIdProvider = StateProvider<String?>((ref) => null);
+/// Der offene Chat. Überlebt einen Neustart: wer die App aus dem Speicher
+/// geworfen bekommt, will danach im selben Gespräch weitermachen.
+final activeChatIdProvider = StateProvider<String?>((ref) {
+  final prefs = ref.watch(prefsProvider);
+  ref.listenSelf((_, next) {
+    if (next == null) {
+      prefs.remove(_activeChatKey);
+    } else {
+      prefs.setString(_activeChatKey, next);
+    }
+  });
+  return prefs.getString(_activeChatKey);
+});
 
-/// Ein Controller pro Chat. Die Modellliste wird hineingereicht, damit der
-/// Controller Kontextgrenze und Ladezustand kennt, ohne selbst zu pollen.
+const _activeChatKey = 'active_chat';
+
+/// Gewählter Bereich der Navigation. Ein Provider statt lokalem Zustand,
+/// damit etwa der Verbindungshinweis im Chat direkt in die Einstellungen
+/// springen kann.
+enum ShellTab { chat, models, system, settings }
+
+final shellTabProvider = StateProvider<ShellTab>((ref) => ShellTab.chat);
+
 /// Ein Controller pro Chat. Modellliste und Kalibrierung werden **nachgereicht**
 /// statt mit `watch` gelesen: ein FutureProvider wechselt von `loading` auf
 /// `data`, und jedes `watch` darauf würde den Controller mitten im Stream
