@@ -5,10 +5,17 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
+  # Manuell: Branch oben auswaehlen, Stufe waehlen, fertig. Die Version
+  # zaehlt vom letzten Tag v* aus hoch; der Workflow legt den Tag selbst an.
   workflow_dispatch:
     inputs:
       release:
-        description: 'Version als Release veroeffentlichen, z. B. v0.1.0 (leer = nur bauen)'
+        description: 'Neue Version: patch (0.1.0 -> 0.1.1), minor (-> 0.2.0), major (-> 1.0.0) oder nur bauen'
+        type: choice
+        options: [patch, minor, major, nur bauen]
+        default: patch
+      version:
+        description: 'Optional: genaue Version, z. B. v1.0.0-beta.1 (ueberschreibt die Stufe)'
         required: false
         default: ''
 
@@ -16,7 +23,74 @@ on:
 permissions:
   contents: read
 
+# Zwei manuelle Releases gleichzeitig wuerden dieselbe Nummer ausrechnen.
+# Sie laufen deshalb nacheinander; alles andere wie gehabt je Ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && 'release' || github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  # Bestimmt einmal fuer den ganzen Lauf, ob und unter welcher Version
+  # veroeffentlicht wird. Alle anderen Jobs lesen nur noch das Ergebnis.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          STUFE: ${{ inputs.release }}
+          GENAU: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          MUSTER='^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'
+          VERSION=""
+          if [[ "$REF" == refs/tags/v* ]]; then
+            VERSION="$REF_NAME"
+          elif [[ "$EVENT" == workflow_dispatch && -n "$GENAU" ]]; then
+            VERSION="$GENAU"
+            [[ "$VERSION" == v* ]] || VERSION="v$VERSION"
+          elif [[ "$EVENT" == workflow_dispatch && "$STUFE" != "nur bauen" ]]; then
+            # Hoechste stabile Version unter den Tags; Vorabversionen
+            # (v1.0.0-beta.1) zaehlen nicht als Ausgangspunkt.
+            LETZTE="$(git ls-remote --tags --refs origin 'v*' \
+              | sed 's#.*refs/tags/##' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -V | tail -1 || true)"
+            if [[ -z "$LETZTE" ]]; then
+              # Noch kein Tag: die Version aus pubspec.yaml ist die erste.
+              VERSION="v$(sed -nE 's/^version: *([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' app/pubspec.yaml)"
+            else
+              IFS=. read -r MA MI PA <<< "${LETZTE#v}"
+              case "$STUFE" in
+                major) VERSION="v$((MA + 1)).0.0" ;;
+                minor) VERSION="v$MA.$((MI + 1)).0" ;;
+                *)     VERSION="v$MA.$MI.$((PA + 1))" ;;
+              esac
+            fi
+            echo "Letzte Version: ${LETZTE:-keine}, Stufe: $STUFE"
+          fi
+
+          if [[ -n "$VERSION" ]]; then
+            [[ "$VERSION" =~ $MUSTER ]] \
+              || { echo "::error::Ungueltige Version: $VERSION"; exit 1; }
+            if [[ "$REF" != refs/tags/* ]] \
+              && git ls-remote --tags --refs --exit-code origin "refs/tags/$VERSION" >/dev/null; then
+              echo "::error::$VERSION gibt es schon - andere Stufe oder Version waehlen."
+              exit 1
+            fi
+            echo "::notice::Veroeffentliche $VERSION"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
   gateway:
     runs-on: ubuntu-latest
     steps:
@@ -43,7 +117,7 @@ jobs:
       - run: flutter test
 
   android:
-    needs: [gateway, app-test]
+    needs: [version, gateway, app-test]
     runs-on: ubuntu-latest
     outputs:
       cert_sha256: ${{ steps.cert.outputs.sha256 }}
@@ -55,7 +129,7 @@ jobs:
       KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
       # Ein Release ohne eigenen Schluessel waere nicht als Update
       # installierbar; dann lieber gar keins.
-      REQUIRE_RELEASE_SIGNING: ${{ (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release != '')) && '1' || '0' }}
+      REQUIRE_RELEASE_SIGNING: ${{ needs.version.outputs.release == 'true' && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -91,7 +165,7 @@ jobs:
       # aus dem Tag, sonst aus pubspec.yaml.
       - name: Version bestimmen
         env:
-          TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release }}
+          TAG: ${{ needs.version.outputs.version }}
         run: |
           NAME="${TAG#v}"
           [ -n "$NAME" ] || NAME="$(grep -E '^version:' pubspec.yaml | sed -E 's/version: *([^+ ]+).*/\1/')"
@@ -138,7 +212,7 @@ jobs:
           path: app/build/app/outputs/bundle/release/app-release.aab
 
   windows:
-    needs: [gateway, app-test]
+    needs: [version, gateway, app-test]
     runs-on: windows-latest
     defaults:
       run:
@@ -155,7 +229,7 @@ jobs:
         shell: bash
       - run: flutter pub get
       - run: dart run flutter_launcher_icons
-      - run: flutter build windows --release --dart-define=APP_VERSION="${{ inputs.release || github.ref_name }}-${{ github.run_number }}"
+      - run: flutter build windows --release --dart-define=APP_VERSION="${{ needs.version.outputs.version || github.ref_name }}-${{ github.run_number }}"
         shell: bash
       - uses: actions/upload-artifact@v4
         with:
@@ -167,18 +241,14 @@ jobs:
   # Tagen ab und brauchen ein GitHub-Konto, ein Release nicht. Beim manuellen
   # Start legt `gh release create` den Tag auf dem gebauten Commit an.
   release:
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release != '')
-    needs: [android, windows]
+    if: needs.version.outputs.release == 'true'
+    needs: [version, android, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
-      VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release }}
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - name: Version pruefen
-        run: |
-          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] \
-            || { echo "::error::Ungueltige Version: $VERSION"; exit 1; }
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -209,8 +279,8 @@ jobs:
   # Entwurf; veroeffentlicht wird in der Play Console von Hand. Den allerersten
   # Upload einer App nimmt die Play-API nicht an, der muss ueber die Console.
   play:
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release != '')
-    needs: [android]
+    if: needs.version.outputs.release == 'true'
+    needs: [version, android]
     runs-on: ubuntu-latest
     env:
       PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}

@@ -70,16 +70,24 @@ Desktop. In den Release-Notizen steht der SHA-256-Fingerabdruck des
 Signaturzertifikats — gleich bleibt er nur, solange derselbe Schlüssel
 signiert, und genau daran erkennt man eine echte APK aus diesem Repo. Das App
 Bundle für Google Play (`.aab`) hängt nur am Workflow-Lauf (*Actions →
-Lauf → Artifacts*), nicht am öffentlichen Release. Ein neues Release entsteht entweder mit einem Tag
+Lauf → Artifacts*), nicht am öffentlichen Release.
 
-```bash
-git tag v0.1.0 && git push origin v0.1.0
-```
+**Neues Release:** *Actions → build → Run workflow*, oben den Branch wählen,
+bei *Neue Version* die Stufe — fertig. Gebaut wird der neueste Commit dieses
+Branches; die Version zählt vom letzten Tag `v*` aus hoch, und der Workflow
+legt den Tag selbst an:
 
-oder ohne Tag unter *Actions → build → Run workflow* mit der Version im Feld
-`release` — der Tag wird dann auf GitHub angelegt. Der `versionCode` kommt aus
-der Laufnummer der Action und steigt damit von selbst, wie Google Play es
-verlangt.
+| Stufe | aus `v0.1.0` wird |
+|---|---|
+| `patch` (Vorgabe) | `v0.1.1` |
+| `minor` | `v0.2.0` |
+| `major` | `v1.0.0` |
+| `nur bauen` | kein Release, nur Artefakte |
+
+Das Feld *genaue Version* (z. B. `v1.0.0-beta.1`) überschreibt die Stufe.
+Gibt es die Version schon, bricht der Lauf ab, bevor gebaut wird. Ein von Hand
+gepushter Tag `v*` löst ebenfalls ein Release aus. Der `versionCode` kommt aus
+der Laufnummer und steigt damit von selbst, wie Google Play es verlangt.
 
 ### Signierung mit eigenem Schlüssel
 
