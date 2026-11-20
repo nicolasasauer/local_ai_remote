@@ -126,7 +126,9 @@ jobs:
         working-directory: app
     env:
       # Secrets sind in `if:` nicht direkt abfragbar - ueber env geht es.
-      KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      # Beide Schreibweisen gelten: ANDROID_KEYSTORE_BASE64 oder
+      # KEYSTORE_BASE64 (ebenso PASSWORD, KEY_ALIAS, KEY_PASSWORD).
+      KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 || secrets.KEYSTORE_BASE64 }}
       # Ein Release ohne eigenen Schluessel waere nicht als Update
       # installierbar; dann lieber gar keins.
       REQUIRE_RELEASE_SIGNING: ${{ needs.version.outputs.release == 'true' && '1' || '0' }}
@@ -178,9 +180,9 @@ jobs:
       - run: dart run flutter_launcher_icons
       - name: APK und App Bundle bauen
         env:
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD || secrets.KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS || secrets.KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD || secrets.KEY_PASSWORD }}
         run: |
           ARGS=(--release --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" --dart-define=APP_VERSION="$BUILD_NAME+$BUILD_NUMBER")
           flutter build apk "${ARGS[@]}"

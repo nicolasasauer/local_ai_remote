@@ -112,11 +112,13 @@ Unter *Settings → Secrets and variables → Actions* anlegen:
 
 | Secret | Inhalt |
 |---|---|
-| `ANDROID_KEYSTORE_BASE64` | Inhalt von `upload.jks.b64` |
-| `ANDROID_KEYSTORE_PASSWORD` | Keystore-Passwort |
-| `ANDROID_KEY_ALIAS` | `upload` (bzw. der gewählte Alias) |
-| `ANDROID_KEY_PASSWORD` | Schlüsselpasswort — bei PKCS12 dasselbe, darf dann fehlen |
+| `KEYSTORE_BASE64` | Inhalt von `upload.jks.b64` |
+| `KEYSTORE_PASSWORD` | Keystore-Passwort |
+| `KEY_ALIAS` | `upload` (bzw. der gewählte Alias) |
+| `KEY_PASSWORD` | Schlüsselpasswort — bei PKCS12 dasselbe, darf dann fehlen |
 | `PLAY_SERVICE_ACCOUNT_JSON` | *optional*: JSON eines Dienstkontos mit Zugriff in der Play Console |
+
+Mit Präfix `ANDROID_` (`ANDROID_KEYSTORE_BASE64` usw.) geht es genauso.
 
 Mit `PLAY_SERVICE_ACCOUNT_JSON` lädt ein Release das App Bundle zusätzlich als
 **Entwurf in die interne Testspur** hoch; freigegeben wird in der Play Console.
