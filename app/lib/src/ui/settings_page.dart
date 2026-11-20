@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/model_entry.dart';
 import '../state/providers.dart';
 import '../theme.dart';
 import 'errors.dart';
 import 'widgets/fact_view.dart';
+
+const repoUrl = 'https://github.com/nicolasasauer/local_ai_remote';
 
 /// Wird von der CI per `--dart-define=APP_VERSION=…` gesetzt.
 const appVersion = String.fromEnvironment('APP_VERSION', defaultValue: 'dev');
@@ -187,7 +190,23 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 FactRow('App-Version', Text(appVersion)),
-                SizedBox(height: 8),
+                SizedBox(height: 10),
+                _Link(
+                  icon: Icons.code,
+                  label: 'Quellcode auf GitHub',
+                  url: repoUrl,
+                ),
+                _Link(
+                  icon: Icons.download_outlined,
+                  label: 'Neue Versionen (Releases)',
+                  url: '$repoUrl/releases',
+                ),
+                _Link(
+                  icon: Icons.bug_report_outlined,
+                  label: 'Fehler melden',
+                  url: '$repoUrl/issues',
+                ),
+                SizedBox(height: 10),
                 Text(
                   'Tastenkürzel am Desktop: Strg+N neuer Chat, Strg+1…4 '
                   'Bereiche, Enter sendet, Umschalt+Enter neue Zeile.',
@@ -264,6 +283,50 @@ class _Health extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Fester Verweis nach außen. Die Adressen stehen im Code — anders als Links
+/// in Modellantworten, die bewusst nicht antippbar sind.
+class _Link extends StatelessWidget {
+  const _Link({required this.icon, required this.label, required this.url});
+
+  final IconData icon;
+  final String label;
+  final String url;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(6),
+      onTap: () async {
+        final ok = await launchUrl(
+          Uri.parse(url),
+          mode: LaunchMode.externalApplication,
+        );
+        if (!ok && context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Konnte $url nicht öffnen')),
+          );
+        }
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 7),
+        child: Row(
+          children: [
+            Icon(icon, size: 16, color: Tone.teal),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(fontSize: 13, color: Tone.ink),
+              ),
+            ),
+            const Icon(Icons.open_in_new, size: 14, color: Tone.faint),
+          ],
+        ),
       ),
     );
   }

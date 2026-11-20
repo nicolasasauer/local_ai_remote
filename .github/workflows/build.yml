@@ -45,6 +45,8 @@ jobs:
   android:
     needs: [gateway, app-test]
     runs-on: ubuntu-latest
+    outputs:
+      cert_sha256: ${{ steps.cert.outputs.sha256 }}
     defaults:
       run:
         working-directory: app
@@ -109,10 +111,23 @@ jobs:
           ARGS=(--release --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" --dart-define=APP_VERSION="$BUILD_NAME+$BUILD_NUMBER")
           flutter build apk "${ARGS[@]}"
           flutter build appbundle "${ARGS[@]}"
+      # Der Fingerabdruck ist oeffentlich (er steckt in jeder APK) und kommt
+      # in die Release-Notizen - damit laesst sich pruefen, dass eine APK
+      # wirklich aus diesem Repo stammt.
       - name: Signatur pruefen
+        id: cert
         run: |
           APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner"
-          "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | grep -E 'Signer #1 certificate (DN|SHA-256)'
+          SHA="$("$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk \
+            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
+          [ -n "$SHA" ] || { echo "::error::APK ist nicht signiert"; exit 1; }
+          echo "Zertifikat SHA-256: $SHA"
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+      # Laeufer sind Wegwerfmaschinen, aber der Schluessel soll keinen
+      # Schritt laenger existieren als noetig.
+      - name: Schluessel entfernen
+        if: always()
+        run: rm -f "$RUNNER_TEMP/upload.jks"
       - uses: actions/upload-artifact@v4
         with:
           name: apk
@@ -140,7 +155,7 @@ jobs:
         shell: bash
       - run: flutter pub get
       - run: dart run flutter_launcher_icons
-      - run: flutter build windows --release --dart-define=APP_VERSION="${{ github.ref_name }}-${{ github.run_number }}"
+      - run: flutter build windows --release --dart-define=APP_VERSION="${{ inputs.release || github.ref_name }}-${{ github.run_number }}"
         shell: bash
       - uses: actions/upload-artifact@v4
         with:
@@ -170,19 +185,23 @@ jobs:
       - name: Dateien benennen
         run: |
           mv dist/apk/app-release.apk "dist/lokal-ai-${VERSION}.apk"
-          mv dist/aab/app-release.aab "dist/lokal-ai-${VERSION}.aab"
           (cd dist/windows && zip -qr "../lokal-ai-${VERSION}-windows.zip" .)
+      # Oeffentlich: APK und Windows-Build. Das App Bundle ist nur fuer
+      # Google Play gedacht und bleibt Workflow-Artefakt.
       - name: Release anlegen
         env:
           GH_TOKEN: ${{ github.token }}
+          CERT: ${{ needs.android.outputs.cert_sha256 }}
         run: |
+          NOTES="**Android:** \`lokal-ai-${VERSION}.apk\` installieren. Signaturzertifikat (SHA-256): \`${CERT}\`
+          **Windows:** \`lokal-ai-${VERSION}-windows.zip\` entpacken und \`local_ai_remote.exe\` starten."
           gh release create "$VERSION" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "$VERSION" \
             --generate-notes \
+            --notes "$NOTES" \
             "dist/lokal-ai-${VERSION}.apk" \
-            "dist/lokal-ai-${VERSION}.aab" \
             "dist/lokal-ai-${VERSION}-windows.zip"
 
   # Optional: das App Bundle in Google Play hochladen - nur, wenn das Secret

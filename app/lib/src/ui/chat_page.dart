@@ -43,6 +43,18 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   bool _stick = true;
   bool _showJump = false;
 
+  /// Finger liegt auf dem Verlauf (oder eine Wischgeste läuft). Solange
+  /// das so ist, springt nichts — ein `jumpTo` mitten in der Geste bricht
+  /// sie ab, und genau das hat das Scrollen beim Streamen unmöglich gemacht:
+  /// beim Denken kommen Dutzende Tokens pro Sekunde, jedes löste einen
+  /// Sprung aus.
+  int _pointers = 0;
+
+  /// Fertig gebaute Nachrichten, nach Identität. Während des Streams ändert
+  /// sich nur die letzte; alle anderen werden so nicht bei jedem Token neu
+  /// als Markdown gesetzt.
+  final _built = <String, (ChatMessage, String?, Widget)>{};
+
   @override
   void initState() {
     super.initState();
@@ -60,15 +72,27 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     super.dispose();
   }
 
-  void _onScroll() {
-    if (!_scroll.hasClients) return;
+  bool get _atEnd {
+    if (!_scroll.hasClients) return true;
     final pos = _scroll.position;
-    final atEnd = pos.maxScrollExtent - pos.pixels < 80;
-    // Nur eine Bewegung des Nutzers löst das Kleben; das Nachwachsen des
-    // Inhalts verschiebt maxScrollExtent und darf das nicht.
-    if (pos.userScrollDirection != ScrollDirection.idle) _stick = atEnd;
-    final show = !atEnd;
+    return pos.maxScrollExtent - pos.pixels < 48;
+  }
+
+  void _onScroll() {
+    final show = !_atEnd;
     if (show != _showJump) setState(() => _showJump = show);
+  }
+
+  /// Nur Eingaben des Nutzers lösen das Kleben am Ende — das Nachwachsen
+  /// des Inhalts und eigene Sprünge erzeugen keine [UserScrollNotification].
+  bool _onScrollNotification(ScrollNotification n) {
+    if (n is UserScrollNotification && n.direction != ScrollDirection.idle) {
+      _stick = false;
+    } else if (n is ScrollEndNotification && _pointers == 0) {
+      // Wer selbst wieder ganz nach unten scrollt, will mitlaufen.
+      _stick = _atEnd;
+    }
+    return false;
   }
 
   ChatController get _controller =>
@@ -95,7 +119,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     });
 
     if (_stick) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToEnd());
+      WidgetsBinding.instance.addPostFrameCallback((_) => _followEnd());
     }
 
     final empty = session.messages.isEmpty && !session.loading;
@@ -190,42 +214,28 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                     )
                     : Stack(
                       children: [
-                        ListView.builder(
-                          controller: _scroll,
-                          padding: const EdgeInsets.only(top: 8, bottom: 12),
-                          itemCount: session.messages.length,
-                          itemBuilder: (context, i) {
-                            final message = session.messages[i];
-                            // Volle Breite bis 860 px, dann mittig: sonst
-                            // landen eigene Nachrichten in der Mitte statt
-                            // rechts.
-                            return Align(
-                              alignment: Alignment.topCenter,
-                              child: ConstrainedBox(
-                                constraints: const BoxConstraints(
-                                  maxWidth: 860,
-                                ),
-                                child: SizedBox(
-                                  width: double.infinity,
-                                  child: MessageView(
-                                    message: message,
-                                    expectedModel: session.chat.model?.id,
-                                    onRetry: _controller.retryLast,
-                                    onToggleInclude:
-                                        () =>
-                                            _controller.toggleInclude(message),
-                                    onUndoSummary:
-                                        () => _controller.undoSummary(message),
-                                    onCopied:
-                                        () => showNotice(
-                                          context,
-                                          'In die Zwischenablage kopiert',
-                                        ),
-                                  ),
-                                ),
+                        Listener(
+                          onPointerDown: (_) => _pointers++,
+                          onPointerUp:
+                              (_) => _pointers = (_pointers - 1).clamp(0, 99),
+                          onPointerCancel:
+                              (_) => _pointers = (_pointers - 1).clamp(0, 99),
+                          child: NotificationListener<ScrollNotification>(
+                            onNotification: _onScrollNotification,
+                            child: ListView.builder(
+                              controller: _scroll,
+                              padding: const EdgeInsets.only(
+                                top: 8,
+                                bottom: 12,
                               ),
-                            );
-                          },
+                              itemCount: session.messages.length,
+                              itemBuilder:
+                                  (context, i) => _messageItem(
+                                    session,
+                                    session.messages[i],
+                                  ),
+                            ),
+                          ),
                         ),
                         if (_showJump)
                           Positioned(
@@ -397,6 +407,51 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     setState(_pending.clear);
     _stick = true;
     await _controller.send(text, attachments: attachments);
+    _jumpToEnd();
+  }
+
+  Widget _messageItem(ChatSession session, ChatMessage message) {
+    final expected = session.chat.model?.id;
+    final cached = _built[message.id];
+    if (cached != null &&
+        identical(cached.$1, message) &&
+        cached.$2 == expected) {
+      return cached.$3;
+    }
+    // Volle Breite bis 860 px, dann mittig: sonst landen eigene Nachrichten
+    // in der Mitte statt rechts.
+    final widget = Align(
+      key: ValueKey(message.id),
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 860),
+        child: SizedBox(
+          width: double.infinity,
+          child: MessageView(
+            message: message,
+            expectedModel: expected,
+            onRetry: _controller.retryLast,
+            onToggleInclude: () => _controller.toggleInclude(message),
+            onUndoSummary: () => _controller.undoSummary(message),
+            onCopied:
+                () => showNotice(context, 'In die Zwischenablage kopiert'),
+          ),
+        ),
+      ),
+    );
+    _built[message.id] = (message, expected, widget);
+    if (_built.length > session.messages.length + 20) {
+      final live = {for (final m in session.messages) m.id};
+      _built.removeWhere((id, _) => !live.contains(id));
+    }
+    return widget;
+  }
+
+  /// Am Ende bleiben — aber nie gegen eine laufende Geste.
+  void _followEnd() {
+    if (!_stick || _pointers > 0 || !_scroll.hasClients) return;
+    final pos = _scroll.position;
+    if (pos.isScrollingNotifier.value) return;
     _jumpToEnd();
   }
 

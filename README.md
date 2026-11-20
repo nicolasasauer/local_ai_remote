@@ -63,9 +63,14 @@ LM Studio muss laufen (`lms server start` oder GUI mit aktivem Server).
 
 **App**
 
-Fertige Builds hängen unter *Releases* am Repo: `lokal-ai-vX.Y.Z.apk` fürs
-Telefon, `lokal-ai-vX.Y.Z.aab` für Google Play, `lokal-ai-vX.Y.Z-windows.zip`
-für den Desktop. Ein neues Release entsteht entweder mit einem Tag
+Fertige Builds hängen unter
+[*Releases*](https://github.com/nicolasasauer/local_ai_remote/releases) am
+Repo: `lokal-ai-vX.Y.Z.apk` fürs Telefon, `lokal-ai-vX.Y.Z-windows.zip` für den
+Desktop. In den Release-Notizen steht der SHA-256-Fingerabdruck des
+Signaturzertifikats — gleich bleibt er nur, solange derselbe Schlüssel
+signiert, und genau daran erkennt man eine echte APK aus diesem Repo. Das App
+Bundle für Google Play (`.aab`) hängt nur am Workflow-Lauf (*Actions →
+Lauf → Artifacts*), nicht am öffentlichen Release. Ein neues Release entsteht entweder mit einem Tag
 
 ```bash
 git tag v0.1.0 && git push origin v0.1.0
