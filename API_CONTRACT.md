@@ -109,6 +109,70 @@ Antwort: `202` mit `{ "state": "unloading" }`.
 Gleicher Body. Hält das Modell im Speicher (Ollama `keep_alive: -1`,
 LM Studio TTL deaktivieren). Antwort: `{ "state": "loaded", "unloads_at": null }`.
 
+## Ladeoptionen
+
+```json
+{ "context_length": 32768, "keep_alive": 1800, "gpu": "auto" }
+```
+
+| Feld | Bedeutung |
+|---|---|
+| `context_length` | Kontextfenster in Tokens, `null` = Vorgabe. Nie über `GATEWAY_MAX_CONTEXT` (sonst `400`) |
+| `keep_alive` | Sekunden im Speicher nach der letzten Anfrage; `-1` dauerhaft, `0` sofort entladen, höchstens 7 Tage |
+| `gpu` | `auto`, `max` (alles auf die GPU), `off` (nur CPU) |
+
+Eine feste Liste, keine durchgereichten Backend-Optionen. Bei **Ollama** gehen
+alle drei pro Anfrage mit (`options.num_ctx`, `options.num_gpu`, `keep_alive`);
+ein anderes `num_ctx` als das geladene lässt Ollama neu laden — der Chat
+meldet dann `loading_model`. **LM Studio** übernimmt Kontext und GPU nur beim
+Laden; im Chat sind sie dort ein `400`, nicht still ignoriert. Erlaubt ist im
+Chat nur `keep_alive > 0` (wird `ttl`).
+
+Nur mit dem App-Token; die Agenten-Oberfläche setzt keine Ladeoptionen.
+
+## POST /v1/models/load
+
+```json
+{ "backend": "ollama", "model": "qwen3:8b", "load": { "context_length": 32768 } }
+```
+
+Lädt jetzt und antwortet erst, wenn das Modell im Speicher ist (bis zu einigen
+Minuten). Ollama: `POST /api/generate` ohne Prompt. LM Studio: `lms load
+<modell> --yes [--context-length] [--gpu] [--ttl]`; ein schon geladenes Modell
+wird vorher entladen, sonst stünde eine zweite Instanz daneben. Antwort:
+`{ "state": "loaded" }`.
+
+## Downloads (nur Ollama, `GATEWAY_ALLOW_PULL=1`)
+
+| Route | |
+|---|---|
+| `GET /v1/models/pulls` | `{"enabled": bool, "jobs": [PullJob]}` |
+| `POST /v1/models/pull` | `{"model": "qwen3:8b"}` → `202` mit dem Auftrag; `409`, wenn schon einer läuft; `403`, wenn ausgeschaltet |
+| `POST /v1/models/pull/cancel` | `{"model": "qwen3:8b"}` |
+
+```json
+{ "model": "qwen3:8b", "state": "running", "status": "pulling 3a1b…",
+  "completed": 4100000000, "total": 8100000000, "error": null,
+  "started_at": "…", "finished_at": null }
+```
+
+Der Download läuft im Gateway, nicht an der Verbindung der App — die App fragt
+nur den Stand ab. `total` bleibt `null`, bis Ollama die Größe nennt. Fertige
+Aufträge bleiben sechs Stunden sichtbar.
+
+Modellnamen werden geprüft (`^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$`): ein Name wie
+`--all` ginge bei LM Studio sonst als Schalter an die CLI.
+
+## Speicherbedarf
+
+`ModelEntry.kv_bytes_per_token` (Fact) ist der KV-Cache pro Token Kontext,
+aus `model_info` von Ollama: 2 × Schichten × KV-Köpfe × Kopfgröße × Bytes pro
+Wert (`OLLAMA_KV_CACHE_TYPE`, sonst f16). Bei Sliding-Window-Modellen eine
+Obergrenze. LM Studio: `unsupported`. Die App rechnet daraus mit Dateigröße
+und freiem Grafikspeicher aus der Telemetrie eine Abschätzung vor dem Laden.
+
+`/v1/health` meldet zusätzlich `pull_enabled` und `max_context`.
+
 ## POST /v1/chat  → `text/event-stream`
 
 ```json
@@ -118,7 +182,8 @@ LM Studio TTL deaktivieren). Antwort: `{ "state": "loaded", "unloads_at": null }
   "messages": [ { "role": "user", "content": "Warum ist der Himmel blau?", "images": [] } ],
   "temperature": 0.7,
   "max_tokens": null,
-  "think": null
+  "think": null,
+  "load": null
 }
 ```
 

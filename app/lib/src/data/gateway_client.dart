@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../models/chat.dart';
+import '../models/load_settings.dart';
 import '../models/model_entry.dart';
 import '../models/telemetry.dart';
 
@@ -127,12 +128,38 @@ class GatewayClient {
 
   Future<void> unload(ModelRef ref) => _post('/v1/models/unload', ref.toJson());
 
-  Future<void> _post(String path, Map<String, dynamic> body) async {
+  /// Lädt ein Modell jetzt. Kehrt erst zurück, wenn es im Speicher ist —
+  /// bei großen Modellen und langsamer Platte mehrere Minuten.
+  Future<void> loadModel(ModelRef ref, LoadSettings settings) => _post(
+        '/v1/models/load',
+        {...ref.toJson(), 'load': settings.toJson()},
+        timeout: const Duration(minutes: 10),
+      );
+
+  Future<PullsSnapshot> pulls() async {
+    final res = await _http
+        .get(_uri('/v1/models/pulls'), headers: _headers)
+        .timeout(const Duration(seconds: 15));
+    _ensureOk(res);
+    return PullsSnapshot.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  Future<void> startPull(String model) =>
+      _post('/v1/models/pull', {'model': model});
+
+  Future<void> cancelPull(String model) =>
+      _post('/v1/models/pull/cancel', {'model': model});
+
+  Future<void> _post(
+    String path,
+    Map<String, dynamic> body, {
+    Duration timeout = const Duration(seconds: 60),
+  }) async {
     final res = await _http
         .post(_uri(path),
             headers: {..._headers, 'Content-Type': 'application/json'},
             body: jsonEncode(body))
-        .timeout(const Duration(seconds: 60));
+        .timeout(timeout);
     _ensureOk(res);
   }
 
@@ -154,12 +181,15 @@ class GatewayClient {
     required List<Map<String, dynamic>> messages,
     double? temperature,
     bool research = false,
+    bool? think,
+    Map<String, dynamic>? load,
   }) async* {
     // Das Abbestellen des Streams schliesst die Verbindung mit; das Gateway
     // sieht den Disconnect und bricht die Generierung auf dem Desktop ab.
     // `gateway_client_test.dart` haelt genau das fest — daran haengt, ob
     // "Abbrechen" wirklich Rechenzeit freigibt.
-    yield* _streamChat(_http, ref, messages, temperature, research);
+    yield* _streamChat(
+        _http, ref, messages, temperature, research, think, load);
   }
 
   Stream<ChatEvent> _streamChat(
@@ -168,6 +198,8 @@ class GatewayClient {
     List<Map<String, dynamic>> messages,
     double? temperature,
     bool research,
+    bool? think,
+    Map<String, dynamic>? load,
   ) async* {
     final request = http.Request('POST', _uri('/v1/chat'))
       ..headers.addAll({
@@ -181,6 +213,8 @@ class GatewayClient {
         'messages': messages,
         if (temperature != null) 'temperature': temperature,
         if (research) 'research': true,
+        if (think != null) 'think': think,
+        if (load != null) 'load': load,
       });
 
     final http.StreamedResponse response;
@@ -311,6 +345,11 @@ class GatewayClient {
   /// (Backoff, letzter Stand) an einer Stelle liegt.
   Stream<TelemetrySample> telemetry() {
     final channel = WebSocketChannel.connect(telemetryUri());
+    // Ein Fehlschlag beim Verbinden kommt zweimal: über `ready` und über den
+    // Stream. Ohne Abnehmer für `ready` landet er als unbehandelter Fehler in
+    // der Zone — bei jedem Reconnect-Versuch, solange der Desktop schläft.
+    // Behandelt wird er über den Stream, beim Aufrufer.
+    channel.ready.ignore();
     return channel.stream.map((raw) => TelemetrySample.fromJson(
         jsonDecode(raw as String) as Map<String, dynamic>));
   }

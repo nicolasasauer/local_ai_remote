@@ -63,6 +63,8 @@ class ModelEntry {
     required this.vramFraction,
     required this.contextLength,
     required this.loadedContextLength,
+    this.kvBytesPerToken = const Fact<int>(
+        certainty: Certainty.unknown, note: 'Gateway liefert den Wert nicht'),
     required this.unloadsAt,
     required this.vision,
     required this.tools,
@@ -84,6 +86,9 @@ class ModelEntry {
   final Fact<double> vramFraction;
   final Fact<int> contextLength;
   final Fact<int> loadedContextLength;
+
+  /// Speicher pro Token Kontext (KV-Cache), geschätzt aus der Architektur.
+  final Fact<int> kvBytesPerToken;
   final Fact<DateTime> unloadsAt;
   final Fact<bool> vision;
   final Fact<bool> tools;
@@ -124,6 +129,7 @@ class ModelEntry {
         vramFraction: Fact.asDouble(j['vram_fraction']),
         contextLength: Fact.asInt(j['context_length']),
         loadedContextLength: Fact.asInt(j['loaded_context_length']),
+        kvBytesPerToken: Fact.asInt(j['kv_bytes_per_token']),
         unloadsAt: Fact.asDate(j['unloads_at']),
         vision: Fact.asBool(j['vision']),
         tools: Fact.asBool(j['tools']),
@@ -140,16 +146,32 @@ class BackendError {
 
 /// Momentaufnahme der Modellliste. Ein Fehler ist hier ein Zustand, kein
 /// Abbruch — "Gateway weg" und "Backend weg" sind verschiedene Dinge.
+/// Marker: es ist noch keine Gateway-Adresse gesetzt.
+class GatewayNotConfigured {
+  const GatewayNotConfigured();
+  @override
+  String toString() => 'Keine Gateway-Adresse gesetzt';
+}
+
 class ModelsSnapshot {
   const ModelsSnapshot({
     this.models = const [],
     this.backendErrors = const [],
     this.gatewayError,
+    this.gatewayErrorCause,
   });
 
   final List<ModelEntry> models;
   final List<BackendError> backendErrors;
   final String? gatewayError;
+
+  /// Die ursprüngliche Ausnahme — damit die Oberfläche einen 401 von einem
+  /// abgeschalteten Desktop unterscheiden kann, statt nur Text zu haben.
+  final Object? gatewayErrorCause;
+
+  /// Gateway gar nicht eingerichtet — etwas anderes als "eingerichtet, aber
+  /// nicht erreichbar".
+  bool get notConfigured => gatewayErrorCause is GatewayNotConfigured;
 
   bool get gatewayReachable => gatewayError == null;
 
@@ -197,11 +219,19 @@ class GatewayHealth {
     required this.hostname,
     required this.gatewayVersion,
     required this.backends,
+    this.pullEnabled = false,
+    this.maxContext,
   });
 
   final String hostname;
   final String gatewayVersion;
   final List<BackendHealth> backends;
+
+  /// Ob das Gateway Modelle herunterladen darf (`GATEWAY_ALLOW_PULL`).
+  final bool pullEnabled;
+
+  /// Obergrenze fürs Kontextfenster (`GATEWAY_MAX_CONTEXT`), sonst `null`.
+  final int? maxContext;
 
   static GatewayHealth fromJson(Map<String, dynamic> j) => GatewayHealth(
         hostname: (j['hostname'] as String?) ?? 'unbekannt',
@@ -209,5 +239,7 @@ class GatewayHealth {
         backends: (j['backends'] as List<dynamic>)
             .map((e) => BackendHealth.fromJson(e as Map<String, dynamic>))
             .toList(),
+        pullEnabled: (j['pull_enabled'] as bool?) ?? false,
+        maxContext: (j['max_context'] as num?)?.toInt(),
       );
 }

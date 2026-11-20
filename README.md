@@ -63,18 +63,87 @@ LM Studio muss laufen (`lms server start` oder GUI mit aktivem Server).
 
 **App**
 
-Fertige Builds hängen unter *Releases* am Repo: `lokal-ai-vX.Y.Z.apk` fürs
-Telefon, `lokal-ai-vX.Y.Z-windows.zip` für den Desktop. Die APK ist mit
-Flutters Debug-Schlüssel signiert — Android fragt nach „Unbekannten Quellen",
-und ein Update aus einem anderen Build lässt sich eventuell nur nach
-Deinstallation einspielen. Ein neues Release entsteht entweder mit einem Tag
+Fertige Builds hängen unter
+[*Releases*](https://github.com/nicolasasauer/local_ai_remote/releases) am
+Repo: `lokal-ai-vX.Y.Z.apk` fürs Telefon, `lokal-ai-vX.Y.Z-windows.zip` für den
+Desktop. In den Release-Notizen steht der SHA-256-Fingerabdruck des
+Signaturzertifikats — gleich bleibt er nur, solange derselbe Schlüssel
+signiert, und genau daran erkennt man eine echte APK aus diesem Repo. Das App
+Bundle für Google Play (`.aab`) hängt nur am Workflow-Lauf (*Actions →
+Lauf → Artifacts*), nicht am öffentlichen Release.
+
+**Neues Release:** *Actions → build → Run workflow*, oben den Branch wählen,
+bei *Neue Version* die Stufe — fertig. Gebaut wird der neueste Commit dieses
+Branches; die Version zählt vom letzten Tag `v*` aus hoch, und der Workflow
+legt den Tag selbst an:
+
+| Stufe | aus `v0.1.0` wird |
+|---|---|
+| `patch` (Vorgabe) | `v0.1.1` |
+| `minor` | `v0.2.0` |
+| `major` | `v1.0.0` |
+| `nur bauen` | kein Release, nur Artefakte |
+
+Das Feld *genaue Version* (z. B. `v1.0.0-beta.1`) überschreibt die Stufe.
+Gibt es die Version schon, bricht der Lauf ab, bevor gebaut wird. Ein von Hand
+gepushter Tag `v*` löst ebenfalls ein Release aus. Der `versionCode` kommt aus
+der Laufnummer und steigt damit von selbst, wie Google Play es verlangt.
+
+### Signierung mit eigenem Schlüssel
+
+Releases werden mit einem eigenen **Upload-Schlüssel** signiert; ohne ihn
+bricht der Release-Lauf ab, statt eine APK mit Debug-Schlüssel zu
+veröffentlichen (die ließe sich nie als Update über eine signierte Version
+installieren). Normale Läufe ohne Secrets — etwa Pull Requests aus Forks —
+bauen weiter mit dem Debug-Schlüssel.
+
+Schlüssel einmalig erzeugen und **sicher aufbewahren** (Passwortmanager) —
+geht er verloren, kann man ihn bei Google Play zwar zurücksetzen lassen, aber
+Sideload-Installationen lassen sich dann nur noch nach Deinstallation
+aktualisieren:
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+keytool -genkeypair -v -keystore upload.jks -storetype PKCS12 \
+  -keyalg RSA -keysize 4096 -validity 10000 -alias upload
+base64 -w0 upload.jks > upload.jks.b64     # macOS: base64 -i upload.jks
 ```
 
-oder ohne Tag unter *Actions → build → Run workflow* mit der Version im Feld
-`release` — der Tag wird dann auf GitHub angelegt.
+Unter *Settings → Secrets and variables → Actions* anlegen:
+
+| Secret | Inhalt |
+|---|---|
+| `KEYSTORE_BASE64` | Inhalt von `upload.jks.b64` |
+| `KEYSTORE_PASSWORD` | Keystore-Passwort |
+| `KEY_ALIAS` | `upload` (bzw. der gewählte Alias) |
+| `KEY_PASSWORD` | Schlüsselpasswort — bei PKCS12 dasselbe, darf dann fehlen |
+| `PLAY_SERVICE_ACCOUNT_JSON` | *optional*: JSON eines Dienstkontos mit Zugriff in der Play Console |
+
+Mit Präfix `ANDROID_` (`ANDROID_KEYSTORE_BASE64` usw.) geht es genauso.
+
+Mit `PLAY_SERVICE_ACCOUNT_JSON` lädt ein Release das App Bundle zusätzlich als
+**Entwurf in die interne Testspur** hoch; freigegeben wird in der Play Console.
+Den allerersten Upload einer App nimmt die Play-API nicht an — die erste
+`.aab` aus dem Release also einmal von Hand hochladen. In der Play Console
+*App-Signatur durch Google Play* aktiv lassen: Google signiert die
+ausgelieferte App mit seinem eigenen Schlüssel, der Upload-Schlüssel oben
+weist nur nach, dass der Upload von dir kommt.
+
+Die Paket-ID ist `de.nicolas.local_ai_remote` (aus `flutter create --org
+de.nicolas`) und lässt sich nach dem ersten Play-Upload nicht mehr ändern.
+
+Lokal signiert `android/key.properties` (nicht eingecheckt):
+
+```properties
+storeFile=/pfad/zu/upload.jks
+storePassword=...
+keyAlias=upload
+keyPassword=...
+```
+
+Eingebunden wird beides über `app/android/app/signing.gradle`; die CI hängt
+an das von `flutter create` erzeugte Build-Skript nur eine `apply`-Zeile an.
+Lokal dieselbe Zeile ans Ende von `android/app/build.gradle.kts` setzen:
+`apply(from = "signing.gradle")`.
 
 Selbst bauen:
 
@@ -143,6 +212,28 @@ Für die Websuche braucht es eine Quelle. Ein lokales SearXNG liegt als
 `docker compose` bei und passt am besten zum Rest des Projekts — siehe
 [search/README.md](search/README.md). Ohne Quelle bietet das Gateway nur den
 Seitenabruf an.
+
+## Modelle laden und herunterladen
+
+Unter *Modelle* → Modell antippen lassen sich pro Modell **Kontextfenster**,
+**Haltedauer** und **GPU-Anteil** einstellen, mit „Jetzt laden" zum
+Vorwärmen. Vor dem Laden zeigt die App eine **Abschätzung**: Gewichte plus
+KV-Cache für das gewählte Fenster gegen den freien Grafikspeicher — „passt",
+„knapp" oder „ein Teil läuft auf der CPU". Fehlt eine Größe (LM Studio nennt
+keine Architekturdaten), steht dort „nicht abschätzbar" mit Grund statt einer
+Zahl.
+
+Mit `GATEWAY_ALLOW_PULL=1` lädt die App neue Modelle über Ollama herunter. Der
+Download läuft im Gateway weiter, auch wenn das Telefon die Verbindung
+verliert. `GATEWAY_MAX_CONTEXT` begrenzt, wie groß die App das Fenster
+stellen darf. Details in [API_CONTRACT.md](API_CONTRACT.md).
+
+Pro Chat einstellbar (*⋮ → Antwortverhalten*): Temperatur und ob ein
+Reasoning-Modell erst nachdenkt.
+
+LM Studio lädt mit Optionen über die CLI (`lms load`). Die Flags dort sind
+gegen die Dokumentation gebaut, aber noch nicht gegen eine echte Installation
+geprüft.
 
 ## Leitgedanken
 

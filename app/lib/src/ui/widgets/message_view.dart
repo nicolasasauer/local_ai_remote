@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 
 import '../../models/chat.dart';
@@ -13,8 +14,13 @@ class MessageView extends StatelessWidget {
     required this.onToggleInclude,
     required this.onUndoSummary,
     this.expectedModel,
+    this.onCopied,
     super.key,
   });
+
+  /// Rückmeldung nach dem Kopieren (Snackbar). Ohne sie wird trotzdem
+  /// kopiert, nur still.
+  final VoidCallback? onCopied;
 
   final ChatMessage message;
 
@@ -74,7 +80,14 @@ class MessageView extends StatelessWidget {
                         running: message.isRunning,
                       ),
                     if (message.content.isNotEmpty)
-                      _Antworttext(text: message.content),
+                      isUser
+                          ? SelectableText(
+                              message.content,
+                              style: const TextStyle(
+                                  fontSize: 14, height: 1.5, color: Tone.ink),
+                            )
+                          : _Antworttext(
+                              text: message.content, onCopied: onCopied),
                     if (message.isRunning &&
                         message.content.isEmpty &&
                         !message.hasReasoning)
@@ -106,6 +119,14 @@ class MessageView extends StatelessWidget {
                 'Abgebrochen',
                 style: TextStyle(fontSize: 11.5, color: Tone.muted),
               ),
+            ),
+          if (!message.isRunning && message.content.trim().isNotEmpty)
+            _Actions(
+              text: message.content,
+              alignEnd: isUser,
+              onCopied: onCopied,
+              onToggleInclude: onToggleInclude,
+              included: message.includeInContext,
             ),
           if (message.metrics != null && !message.isRunning)
             _MetricsRow(metrics: message.metrics!),
@@ -620,9 +641,10 @@ class _WerkzeugergebnisState extends State<_Werkzeugergebnis> {
 /// kommt zeichenweise, und ein Renderer, der an unvollständiger Syntax
 /// scheitert, würde bei jedem zweiten Token flackern.
 class _Antworttext extends StatelessWidget {
-  const _Antworttext({required this.text});
+  const _Antworttext({required this.text, this.onCopied});
 
   final String text;
+  final VoidCallback? onCopied;
 
   @override
   Widget build(BuildContext context) {
@@ -634,20 +656,132 @@ class _Antworttext extends StatelessWidget {
         // aus einer Modellausgabe, und ein Fingertipp soll nicht ungefragt
         // einen Browser auf sie richten.
         onLinkTap: null,
-        codeBuilder: (context, name, code, closed) => Container(
-          width: double.infinity,
-          margin: const EdgeInsets.symmetric(vertical: 6),
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: Tone.base,
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: Tone.hairline),
+        codeBuilder:
+            (context, name, code, closed) => _CodeBlock(
+              language: name,
+              code: code.trimRight(),
+              onCopied: onCopied,
+            ),
+      ),
+    );
+  }
+}
+
+class _CodeBlock extends StatelessWidget {
+  const _CodeBlock({required this.language, required this.code, this.onCopied});
+
+  final String language;
+  final String code;
+  final VoidCallback? onCopied;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      decoration: BoxDecoration(
+        color: Tone.base,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Tone.hairline),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(10, 2, 2, 2),
+            decoration: const BoxDecoration(
+              border: Border(bottom: BorderSide(color: Tone.hairline)),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    language.trim().isEmpty ? 'Code' : language.trim(),
+                    style: kMono.copyWith(fontSize: 11, color: Tone.faint),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Code kopieren',
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 15,
+                  color: Tone.muted,
+                  onPressed: () async {
+                    await Clipboard.setData(ClipboardData(text: code));
+                    onCopied?.call();
+                  },
+                  icon: const Icon(Icons.copy_rounded),
+                ),
+              ],
+            ),
           ),
-          child: SelectableText(
-            code.trimRight(),
-            style: kMono.copyWith(fontSize: 12.5, color: Tone.ink, height: 1.4),
+          // Lange Zeilen scrollen waagrecht, statt umzubrechen: umbrochener
+          // Code ist auf dem Telefon kaum noch zu lesen.
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.all(10),
+            child: SelectableText(
+              code,
+              style: kMono.copyWith(
+                fontSize: 12.5,
+                color: Tone.ink,
+                height: 1.4,
+              ),
+            ),
           ),
-        ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Unauffällige Aktionen unter einer Nachricht.
+class _Actions extends StatelessWidget {
+  const _Actions({
+    required this.text,
+    required this.alignEnd,
+    required this.onToggleInclude,
+    required this.included,
+    this.onCopied,
+  });
+
+  final String text;
+  final bool alignEnd;
+  final VoidCallback onToggleInclude;
+  final bool included;
+  final VoidCallback? onCopied;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget button(IconData icon, String tip, VoidCallback onTap) => IconButton(
+      tooltip: tip,
+      onPressed: onTap,
+      icon: Icon(icon),
+      iconSize: 15,
+      color: Tone.faint,
+      visualDensity: VisualDensity.compact,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 30, minHeight: 28),
+    );
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          button(Icons.copy_rounded, 'Kopieren', () async {
+            await Clipboard.setData(ClipboardData(text: text));
+            onCopied?.call();
+          }),
+          button(
+            included
+                ? Icons.visibility_outlined
+                : Icons.visibility_off_outlined,
+            included
+                ? 'Aus dem Kontext nehmen (bleibt im Verlauf)'
+                : 'Wieder in den Kontext aufnehmen',
+            onToggleInclude,
+          ),
+        ],
       ),
     );
   }

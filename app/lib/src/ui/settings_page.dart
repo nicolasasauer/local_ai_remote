@@ -1,10 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/model_entry.dart';
 import '../state/providers.dart';
 import '../theme.dart';
+import 'errors.dart';
 import 'widgets/fact_view.dart';
+
+const repoUrl = 'https://github.com/nicolasasauer/local_ai_remote';
+
+/// Wird von der CI per `--dart-define=APP_VERSION=…` gesetzt.
+const appVersion = String.fromEnvironment('APP_VERSION', defaultValue: 'dev');
 
 class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
@@ -17,6 +24,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   late final TextEditingController _url;
   late final TextEditingController _token;
   bool _dirty = false;
+  bool _showToken = false;
+  String? _urlError;
 
   @override
   void initState() {
@@ -33,6 +42,24 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     super.dispose();
   }
 
+  Future<void> _save() async {
+    final url = normalizeGatewayUrl(_url.text);
+    final problem = validateGatewayUrl(url);
+    if (problem != null) {
+      setState(() => _urlError = problem);
+      return;
+    }
+    if (url != _url.text) _url.text = url;
+    await ref.read(settingsProvider.notifier).save(
+          baseUrl: url,
+          token: _token.text,
+        );
+    if (!mounted) return;
+    setState(() => _dirty = false);
+    ref.invalidate(healthProvider);
+    ref.read(telemetryProvider.notifier).reconnectNow();
+  }
+
   @override
   Widget build(BuildContext context) {
     final health = ref.watch(healthProvider);
@@ -45,10 +72,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           const _Label('Gateway'),
           TextField(
             controller: _url,
-            onChanged: (_) => setState(() => _dirty = true),
-            decoration: const InputDecoration(
+            keyboardType: TextInputType.url,
+            autocorrect: false,
+            onChanged: (_) => setState(() {
+              _dirty = true;
+              _urlError = null;
+            }),
+            decoration: InputDecoration(
               hintText: 'https://desktop.tailnet.ts.net',
-              prefixIcon: Icon(Icons.link, size: 18),
+              prefixIcon: const Icon(Icons.link, size: 18),
+              errorText: _urlError,
             ),
           ),
           const SizedBox(height: 6),
@@ -61,30 +94,49 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           const _Label('Token'),
           TextField(
             controller: _token,
-            obscureText: true,
+            obscureText: !_showToken,
+            autocorrect: false,
+            enableSuggestions: false,
             onChanged: (_) => setState(() => _dirty = true),
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               hintText: 'GATEWAY_TOKEN',
-              prefixIcon: Icon(Icons.key, size: 18),
+              prefixIcon: const Icon(Icons.key, size: 18),
+              suffixIcon: IconButton(
+                tooltip: _showToken ? 'Verbergen' : 'Anzeigen',
+                icon: Icon(
+                  _showToken ? Icons.visibility_off : Icons.visibility,
+                  size: 18,
+                ),
+                onPressed: () => setState(() => _showToken = !_showToken),
+              ),
             ),
           ),
+          const SizedBox(height: 6),
+          const Text(
+            'Liegt nur auf diesem Gerät und wird nicht in Backups übernommen.',
+            style: TextStyle(fontSize: 11.5, color: Tone.faint, height: 1.4),
+          ),
           const SizedBox(height: 14),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: FilledButton(
-              onPressed: _dirty
-                  ? () async {
-                      await ref.read(settingsProvider.notifier).save(
-                            baseUrl: _url.text,
-                            token: _token.text,
-                          );
-                      setState(() => _dirty = false);
-                      ref.invalidate(healthProvider);
-                      ref.read(telemetryProvider.notifier).reconnectNow();
-                    }
-                  : null,
-              child: const Text('Speichern und verbinden'),
-            ),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton(
+                onPressed: _dirty ? _save : null,
+                child: const Text('Speichern und verbinden'),
+              ),
+              OutlinedButton.icon(
+                onPressed: ref.watch(settingsProvider).isConfigured
+                    ? () {
+                        ref.invalidate(healthProvider);
+                        ref.invalidate(modelsProvider);
+                        ref.read(telemetryProvider.notifier).reconnectNow();
+                      }
+                    : null,
+                icon: const Icon(Icons.refresh, size: 17),
+                label: const Text('Erneut prüfen'),
+              ),
+            ],
           ),
           const SizedBox(height: 26),
           const _Label('Verbindung'),
@@ -93,14 +145,76 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               padding: EdgeInsets.symmetric(vertical: 14),
               child: LinearProgressIndicator(minHeight: 2),
             ),
-            error: (e, _) => _Card(
-              accent: Tone.alert,
-              child: Text(
-                '$e',
-                style: const TextStyle(fontSize: 12.5, color: Tone.ink, height: 1.45),
-              ),
-            ),
+            error: (e, _) {
+              final problem = describeError(e);
+              return _Card(
+                accent: Tone.alert,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.error_outline,
+                            size: 16, color: Tone.alert),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            problem.headline,
+                            style: const TextStyle(
+                                fontSize: 13,
+                                color: Tone.ink,
+                                fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (problem.detail != null) ...[
+                      const SizedBox(height: 6),
+                      SelectableText(
+                        problem.detail!,
+                        style: const TextStyle(
+                            fontSize: 11.5, color: Tone.muted, height: 1.45),
+                      ),
+                    ],
+                  ],
+                ),
+              );
+            },
             data: (data) => _Health(health: data),
+          ),
+          const SizedBox(height: 26),
+          const _Label('Über'),
+          const _Card(
+            accent: Tone.hairline,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                FactRow('App-Version', Text(appVersion)),
+                SizedBox(height: 10),
+                _Link(
+                  icon: Icons.code,
+                  label: 'Quellcode auf GitHub',
+                  url: repoUrl,
+                ),
+                _Link(
+                  icon: Icons.download_outlined,
+                  label: 'Neue Versionen (Releases)',
+                  url: '$repoUrl/releases',
+                ),
+                _Link(
+                  icon: Icons.bug_report_outlined,
+                  label: 'Fehler melden',
+                  url: '$repoUrl/issues',
+                ),
+                SizedBox(height: 10),
+                Text(
+                  'Tastenkürzel am Desktop: Strg+N neuer Chat, Strg+1…4 '
+                  'Bereiche, Enter sendet, Umschalt+Enter neue Zeile.',
+                  style: TextStyle(
+                      fontSize: 11.5, color: Tone.faint, height: 1.4),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -169,6 +283,50 @@ class _Health extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Fester Verweis nach außen. Die Adressen stehen im Code — anders als Links
+/// in Modellantworten, die bewusst nicht antippbar sind.
+class _Link extends StatelessWidget {
+  const _Link({required this.icon, required this.label, required this.url});
+
+  final IconData icon;
+  final String label;
+  final String url;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(6),
+      onTap: () async {
+        final ok = await launchUrl(
+          Uri.parse(url),
+          mode: LaunchMode.externalApplication,
+        );
+        if (!ok && context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Konnte $url nicht öffnen')),
+          );
+        }
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 7),
+        child: Row(
+          children: [
+            Icon(icon, size: 16, color: Tone.teal),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(fontSize: 13, color: Tone.ink),
+              ),
+            ),
+            const Icon(Icons.open_in_new, size: 14, color: Tone.faint),
+          ],
+        ),
       ),
     );
   }

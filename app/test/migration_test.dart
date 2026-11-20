@@ -91,6 +91,8 @@ void main() {
     expect(chat!.title, 'Alter Chat');
     // Die Voreinstellungen der neuen Spalten muessen greifen.
     expect(chat.researchEnabled, isFalse);
+    expect(chat.temperature, isNull);
+    expect(chat.think, ThinkMode.auto);
 
     final messages = await store.messages('alt');
     expect(messages, hasLength(1));
@@ -121,6 +123,22 @@ void main() {
     final geladen = (await store.messages('alt')).last;
     expect(geladen.role, MessageRole.tool);
     expect(geladen.quellen.single.url, 'https://example.com');
+  });
+
+  test('v4: Antwortverhalten wird gespeichert und gelesen', () async {
+    await legeV1An();
+    final store = await ChatStore.open(path: pfad);
+    addTearDown(store.close);
+
+    final chat = (await store.chat('alt'))!;
+    await store.upsertChat(
+        chat.copyWith(temperature: 0.2, think: ThinkMode.off));
+    final gelesen = (await store.chat('alt'))!;
+    expect(gelesen.temperature, 0.2);
+    expect(gelesen.think, ThinkMode.off);
+
+    await store.upsertChat(gelesen.copyWith(clearTemperature: true));
+    expect((await store.chat('alt'))!.temperature, isNull);
   });
 
   test('zweimal oeffnen migriert nicht doppelt', () async {

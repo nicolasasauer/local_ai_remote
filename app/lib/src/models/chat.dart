@@ -371,6 +371,28 @@ class ChatMessage {
       );
 }
 
+/// Ob ein Reasoning-Modell erst nachdenken soll.
+enum ThinkMode {
+  /// Das Gateway entscheidet nach den Fähigkeiten des Modells.
+  auto(null, 'Automatisch'),
+  on(true, 'An'),
+  off(false, 'Aus');
+
+  const ThinkMode(this.wire, this.label);
+
+  /// `null` wird gar nicht erst gesendet.
+  final bool? wire;
+  final String label;
+
+  int? get column => wire == null ? null : (wire! ? 1 : 0);
+
+  static ThinkMode fromColumn(Object? raw) => switch (raw) {
+        1 => ThinkMode.on,
+        0 => ThinkMode.off,
+        _ => ThinkMode.auto,
+      };
+}
+
 class Chat {
   const Chat({
     required this.id,
@@ -381,6 +403,8 @@ class Chat {
     this.compressionEnabled = false,
     this.systemPrompt,
     this.researchEnabled = false,
+    this.temperature,
+    this.think = ThinkMode.auto,
   });
 
   final String id;
@@ -401,6 +425,11 @@ class Chat {
   /// jeder einzelne Aufruf braucht darüber hinaus eine Freigabe.
   final bool researchEnabled;
 
+  /// `null`: Vorgabe des Modells. Sonst 0 (nüchtern) bis 2 (wild).
+  final double? temperature;
+
+  final ThinkMode think;
+
   /// Gleichheit nur über die id: der Chat dient als Schlüssel einer
   /// Provider-Family, und ein Umbenennen mitten im Stream darf den laufenden
   /// Controller nicht ersetzen.
@@ -417,6 +446,9 @@ class Chat {
     String? systemPrompt,
     bool? researchEnabled,
     DateTime? updatedAt,
+    double? temperature,
+    bool clearTemperature = false,
+    ThinkMode? think,
   }) =>
       Chat(
         id: id,
@@ -427,6 +459,9 @@ class Chat {
         compressionEnabled: compressionEnabled ?? this.compressionEnabled,
         systemPrompt: systemPrompt ?? this.systemPrompt,
         researchEnabled: researchEnabled ?? this.researchEnabled,
+        temperature:
+            clearTemperature ? null : (temperature ?? this.temperature),
+        think: think ?? this.think,
       );
 
   Map<String, Object?> toRow() => {
@@ -439,6 +474,8 @@ class Chat {
         'compression_enabled': compressionEnabled ? 1 : 0,
         'system_prompt': systemPrompt,
         'research_enabled': researchEnabled ? 1 : 0,
+        'temperature': temperature,
+        'think': think.column,
       };
 
   static Chat fromRow(Map<String, Object?> r) {
@@ -457,6 +494,8 @@ class Chat {
       compressionEnabled: ((r['compression_enabled'] as int?) ?? 0) == 1,
       systemPrompt: r['system_prompt'] as String?,
       researchEnabled: ((r['research_enabled'] as int?) ?? 0) == 1,
+      temperature: (r['temperature'] as num?)?.toDouble(),
+      think: ThinkMode.fromColumn(r['think']),
     );
   }
 }

@@ -5,10 +5,17 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
+  # Manuell: Branch oben auswaehlen, Stufe waehlen, fertig. Die Version
+  # zaehlt vom letzten Tag v* aus hoch; der Workflow legt den Tag selbst an.
   workflow_dispatch:
     inputs:
       release:
-        description: 'Version als Release veroeffentlichen, z. B. v0.1.0 (leer = nur bauen)'
+        description: 'Neue Version: patch (0.1.0 -> 0.1.1), minor (-> 0.2.0), major (-> 1.0.0) oder nur bauen'
+        type: choice
+        options: [patch, minor, major, nur bauen]
+        default: patch
+      version:
+        description: 'Optional: genaue Version, z. B. v1.0.0-beta.1 (ueberschreibt die Stufe)'
         required: false
         default: ''
 
@@ -16,7 +23,74 @@ on:
 permissions:
   contents: read
 
+# Zwei manuelle Releases gleichzeitig wuerden dieselbe Nummer ausrechnen.
+# Sie laufen deshalb nacheinander; alles andere wie gehabt je Ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && 'release' || github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  # Bestimmt einmal fuer den ganzen Lauf, ob und unter welcher Version
+  # veroeffentlicht wird. Alle anderen Jobs lesen nur noch das Ergebnis.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          STUFE: ${{ inputs.release }}
+          GENAU: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          MUSTER='^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'
+          VERSION=""
+          if [[ "$REF" == refs/tags/v* ]]; then
+            VERSION="$REF_NAME"
+          elif [[ "$EVENT" == workflow_dispatch && -n "$GENAU" ]]; then
+            VERSION="$GENAU"
+            [[ "$VERSION" == v* ]] || VERSION="v$VERSION"
+          elif [[ "$EVENT" == workflow_dispatch && "$STUFE" != "nur bauen" ]]; then
+            # Hoechste stabile Version unter den Tags; Vorabversionen
+            # (v1.0.0-beta.1) zaehlen nicht als Ausgangspunkt.
+            LETZTE="$(git ls-remote --tags --refs origin 'v*' \
+              | sed 's#.*refs/tags/##' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -V | tail -1 || true)"
+            if [[ -z "$LETZTE" ]]; then
+              # Noch kein Tag: die Version aus pubspec.yaml ist die erste.
+              VERSION="v$(sed -nE 's/^version: *([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' app/pubspec.yaml)"
+            else
+              IFS=. read -r MA MI PA <<< "${LETZTE#v}"
+              case "$STUFE" in
+                major) VERSION="v$((MA + 1)).0.0" ;;
+                minor) VERSION="v$MA.$((MI + 1)).0" ;;
+                *)     VERSION="v$MA.$MI.$((PA + 1))" ;;
+              esac
+            fi
+            echo "Letzte Version: ${LETZTE:-keine}, Stufe: $STUFE"
+          fi
+
+          if [[ -n "$VERSION" ]]; then
+            [[ "$VERSION" =~ $MUSTER ]] \
+              || { echo "::error::Ungueltige Version: $VERSION"; exit 1; }
+            if [[ "$REF" != refs/tags/* ]] \
+              && git ls-remote --tags --refs --exit-code origin "refs/tags/$VERSION" >/dev/null; then
+              echo "::error::$VERSION gibt es schon - andere Stufe oder Version waehlen."
+              exit 1
+            fi
+            echo "::notice::Veroeffentliche $VERSION"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
   gateway:
     runs-on: ubuntu-latest
     steps:
@@ -43,11 +117,21 @@ jobs:
       - run: flutter test
 
   android:
-    needs: [gateway, app-test]
+    needs: [version, gateway, app-test]
     runs-on: ubuntu-latest
+    outputs:
+      cert_sha256: ${{ steps.cert.outputs.sha256 }}
     defaults:
       run:
         working-directory: app
+    env:
+      # Secrets sind in `if:` nicht direkt abfragbar - ueber env geht es.
+      # Beide Schreibweisen gelten: ANDROID_KEYSTORE_BASE64 oder
+      # KEYSTORE_BASE64 (ebenso PASSWORD, KEY_ALIAS, KEY_PASSWORD).
+      KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 || secrets.KEYSTORE_BASE64 }}
+      # Ein Release ohne eigenen Schluessel waere nicht als Update
+      # installierbar; dann lieber gar keins.
+      REQUIRE_RELEASE_SIGNING: ${{ needs.version.outputs.release == 'true' && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -63,18 +147,74 @@ jobs:
       # das gegen diesen Baum nicht kompiliert.
       - run: flutter create --platforms=android --org de.nicolas .
       - run: rm -f test/widget_test.dart README.md
+      # Signierung einbinden. Die Vorlage ist je nach Flutter-Version Kotlin-
+      # oder Groovy-DSL; angehaengt wird ans Ende, damit die Einstellung der
+      # Vorlage (Debug-Schluessel) ueberschrieben wird.
+      - name: Signierung einbinden
+        run: |
+          if [ -f android/app/build.gradle.kts ]; then
+            echo 'apply(from = "signing.gradle")' >> android/app/build.gradle.kts
+          else
+            echo "apply from: 'signing.gradle'" >> android/app/build.gradle
+          fi
+      - name: Upload-Schluessel bereitstellen
+        if: env.KEYSTORE_B64 != ''
+        run: |
+          echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/upload.jks"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
+      # versionCode muss fuer Google Play mit jedem Upload steigen. Die
+      # Laufnummer tut das von selbst; der Versionsname kommt beim Release
+      # aus dem Tag, sonst aus pubspec.yaml.
+      - name: Version bestimmen
+        env:
+          TAG: ${{ needs.version.outputs.version }}
+        run: |
+          NAME="${TAG#v}"
+          [ -n "$NAME" ] || NAME="$(grep -E '^version:' pubspec.yaml | sed -E 's/version: *([^+ ]+).*/\1/')"
+          echo "BUILD_NAME=$NAME" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=$((1000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+          echo "Version $NAME ($((1000 + GITHUB_RUN_NUMBER)))"
       - run: flutter pub get
       # Die Icons liegen in den generierten Plattformordnern - ohne diesen
       # Schritt traegt die APK das Flutter-Standardicon.
       - run: dart run flutter_launcher_icons
-      - run: flutter build apk --release
+      - name: APK und App Bundle bauen
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD || secrets.KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS || secrets.KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD || secrets.KEY_PASSWORD }}
+        run: |
+          ARGS=(--release --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" --dart-define=APP_VERSION="$BUILD_NAME+$BUILD_NUMBER")
+          flutter build apk "${ARGS[@]}"
+          flutter build appbundle "${ARGS[@]}"
+      # Der Fingerabdruck ist oeffentlich (er steckt in jeder APK) und kommt
+      # in die Release-Notizen - damit laesst sich pruefen, dass eine APK
+      # wirklich aus diesem Repo stammt.
+      - name: Signatur pruefen
+        id: cert
+        run: |
+          APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner"
+          SHA="$("$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk \
+            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
+          [ -n "$SHA" ] || { echo "::error::APK ist nicht signiert"; exit 1; }
+          echo "Zertifikat SHA-256: $SHA"
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+      # Laeufer sind Wegwerfmaschinen, aber der Schluessel soll keinen
+      # Schritt laenger existieren als noetig.
+      - name: Schluessel entfernen
+        if: always()
+        run: rm -f "$RUNNER_TEMP/upload.jks"
       - uses: actions/upload-artifact@v4
         with:
           name: apk
           path: app/build/app/outputs/flutter-apk/app-release.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aab
+          path: app/build/app/outputs/bundle/release/app-release.aab
 
   windows:
-    needs: [gateway, app-test]
+    needs: [version, gateway, app-test]
     runs-on: windows-latest
     defaults:
       run:
@@ -91,7 +231,8 @@ jobs:
         shell: bash
       - run: flutter pub get
       - run: dart run flutter_launcher_icons
-      - run: flutter build windows --release
+      - run: flutter build windows --release --dart-define=APP_VERSION="${{ needs.version.outputs.version || github.ref_name }}-${{ github.run_number }}"
+        shell: bash
       - uses: actions/upload-artifact@v4
         with:
           name: windows
@@ -102,18 +243,14 @@ jobs:
   # Tagen ab und brauchen ein GitHub-Konto, ein Release nicht. Beim manuellen
   # Start legt `gh release create` den Tag auf dem gebauten Commit an.
   release:
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release != '')
-    needs: [android, windows]
+    if: needs.version.outputs.release == 'true'
+    needs: [version, android, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
-      VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release }}
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - name: Version pruefen
-        run: |
-          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] \
-            || { echo "::error::Ungueltige Version: $VERSION"; exit 1; }
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -121,14 +258,48 @@ jobs:
         run: |
           mv dist/apk/app-release.apk "dist/lokal-ai-${VERSION}.apk"
           (cd dist/windows && zip -qr "../lokal-ai-${VERSION}-windows.zip" .)
+      # Oeffentlich: APK und Windows-Build. Das App Bundle ist nur fuer
+      # Google Play gedacht und bleibt Workflow-Artefakt.
       - name: Release anlegen
         env:
           GH_TOKEN: ${{ github.token }}
+          CERT: ${{ needs.android.outputs.cert_sha256 }}
         run: |
+          NOTES="**Android:** \`lokal-ai-${VERSION}.apk\` installieren. Signaturzertifikat (SHA-256): \`${CERT}\`
+          **Windows:** \`lokal-ai-${VERSION}-windows.zip\` entpacken und \`local_ai_remote.exe\` starten."
           gh release create "$VERSION" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "$VERSION" \
             --generate-notes \
+            --notes "$NOTES" \
             "dist/lokal-ai-${VERSION}.apk" \
             "dist/lokal-ai-${VERSION}-windows.zip"
+
+  # Optional: das App Bundle in Google Play hochladen - nur, wenn das Secret
+  # PLAY_SERVICE_ACCOUNT_JSON hinterlegt ist. Ziel ist die interne Testspur als
+  # Entwurf; veroeffentlicht wird in der Play Console von Hand. Den allerersten
+  # Upload einer App nimmt die Play-API nicht an, der muss ueber die Console.
+  play:
+    if: needs.version.outputs.release == 'true'
+    needs: [version, android]
+    runs-on: ubuntu-latest
+    env:
+      PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - name: Ohne Zugang ueberspringen
+        if: env.PLAY_JSON == ''
+        run: echo "::notice::PLAY_SERVICE_ACCOUNT_JSON fehlt - kein Upload nach Google Play."
+      - uses: actions/download-artifact@v4
+        if: env.PLAY_JSON != ''
+        with:
+          name: aab
+          path: dist
+      - uses: r0adkll/upload-google-play@v1
+        if: env.PLAY_JSON != ''
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: de.nicolas.local_ai_remote
+          releaseFiles: dist/app-release.aab
+          track: internal
+          status: draft

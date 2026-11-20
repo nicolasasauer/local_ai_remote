@@ -22,6 +22,8 @@ from ..schema import (
     ChatMetrics,
     ChatRequest,
     Fact,
+    GpuMode,
+    LoadOptions,
     ModelEntry,
     ModelKind,
     ModelState,
@@ -36,6 +38,7 @@ from .base import (
     Failure,
     NotSupported,
     Reasoning,
+    check_model_name,
     Status,
     ToolCalls,
 )
@@ -68,6 +71,22 @@ def _sammle(aufrufe: dict[int, dict[str, str]], fragment: dict[str, Any]) -> Non
 
 class LmStudioBackend(Backend):
     id = BackendId.lmstudio
+
+    def check_chat_load(self, opts: LoadOptions) -> None:
+        # Die OpenAI-kompatible Route nimmt nur eine TTL an. Kontextfenster
+        # und GPU-Anteil stehen beim Laden fest.
+        if opts.context_length is not None or opts.gpu is not GpuMode.auto:
+            raise BackendError(
+                "LM Studio uebernimmt Kontextfenster und GPU-Anteil nur beim "
+                "Laden - dafuer /v1/models/load benutzen",
+                status_code=400,
+            )
+        if opts.keep_alive is not None and opts.keep_alive <= 0:
+            raise BackendError(
+                "LM Studio kennt pro Anfrage nur eine Haltedauer > 0 s; "
+                "dauerhaft halten geht ueber /v1/models/load",
+                status_code=400,
+            )
 
     async def health(self) -> BackendHealth:
         try:
@@ -149,6 +168,10 @@ class LmStudioBackend(Backend):
                 else Fact.unsupported_because("Modell ist nicht geladen")
             ),
             unloads_at=Fact.unsupported_because(_NO_TTL),
+            kv_bytes_per_token=Fact.unsupported_because(
+                "LM Studio nennt keine Architekturdaten - Speicherbedarf des "
+                "Kontexts nicht abschaetzbar"
+            ),
             vision=vision,
             tools=Fact.unknown_because(
                 "LM Studio kennzeichnet Tool-Unterstuetzung nicht pro Modell"
@@ -185,6 +208,12 @@ class LmStudioBackend(Backend):
             payload["tools"] = req.tools
         if req.tool_choice is not None:
             payload["tool_choice"] = req.tool_choice
+        if req.load is not None:
+            self.check_chat_load(req.load)
+            if req.load.keep_alive is not None:
+                # Gilt nur, wenn LM Studio das Modell fuer diese Anfrage erst
+                # laedt (JIT) - ein ausdruecklich geladenes behaelt seine TTL.
+                payload["ttl"] = req.load.keep_alive
 
         started = time.perf_counter()
         first_token_at: float | None = None
@@ -395,6 +424,7 @@ class LmStudioBackend(Backend):
             raise NotSupported(
                 "Pinnen geht bei LM Studio nur ueber die TTL-Einstellung in der App"
             )
+        check_model_name(model)
         # Kein REST-Endpunkt zum Entladen - die CLI kann es, wenn installiert.
         lms = shutil.which("lms")
         if not lms:
@@ -417,4 +447,50 @@ class LmStudioBackend(Backend):
         if proc.returncode != 0:
             raise BackendError(
                 f"lms unload fehlgeschlagen: {(proc.stderr or proc.stdout)[:200]}"
+            )
+
+    async def load(self, model: str, opts: LoadOptions) -> None:
+        """Laedt ueber ``lms load`` - die REST-Route kennt keine Ladeoptionen.
+
+        Ist das Modell schon geladen, wird es vorher entladen. ``lms load``
+        legt sonst eine zweite Instanz daneben, und beide belegen Speicher.
+        """
+        check_model_name(model)
+        lms = shutil.which("lms")
+        if not lms:
+            raise NotSupported(
+                "Laden mit Optionen braucht die LM-Studio-CLI ('lms'), die hier "
+                "nicht gefunden wurde"
+            )
+        if opts.keep_alive == 0:
+            raise BackendError(
+                "Haltedauer 0 hiesse: laden und sofort wieder entladen",
+                status_code=400,
+            )
+
+        geladen = {m.id for m in await self.list_models() if m.state is ModelState.loaded}
+        if model in geladen:
+            await self.set_keep_alive(model, pin=False)
+
+        args = [lms, "load", model, "--yes"]
+        if opts.context_length is not None:
+            args += ["--context-length", str(opts.context_length)]
+        if opts.gpu is GpuMode.max:
+            args += ["--gpu", "max"]
+        elif opts.gpu is GpuMode.off:
+            args += ["--gpu", "off"]
+        if opts.keep_alive is not None and opts.keep_alive > 0:
+            args += ["--ttl", str(opts.keep_alive)]
+        # keep_alive -1: ohne --ttl bleibt ein ausdruecklich geladenes Modell,
+        # bis es entladen wird.
+
+        try:
+            proc = await asyncio.to_thread(
+                subprocess.run, args, capture_output=True, text=True, timeout=600
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise BackendError("lms load hat nach 10 Minuten nicht geantwortet") from exc
+        if proc.returncode != 0:
+            raise BackendError(
+                f"lms load fehlgeschlagen: {(proc.stderr or proc.stdout)[:300]}"
             )

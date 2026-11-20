@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -8,6 +9,7 @@ import '../chat/chat_controller.dart';
 import '../data/chat_store.dart';
 import '../data/gateway_client.dart';
 import '../models/chat.dart';
+import '../models/load_settings.dart';
 import '../models/model_entry.dart';
 import '../models/telemetry.dart';
 
@@ -72,7 +74,10 @@ final gatewayClientProvider = Provider<GatewayClient>((ref) {
 final modelsProvider = StreamProvider<ModelsSnapshot>((ref) async* {
   final client = ref.watch(gatewayClientProvider);
   if (!client.isConfigured) {
-    yield const ModelsSnapshot(gatewayError: 'Keine Gateway-Adresse gesetzt');
+    yield const ModelsSnapshot(
+      gatewayError: 'Keine Gateway-Adresse gesetzt',
+      gatewayErrorCause: GatewayNotConfigured(),
+    );
     return;
   }
 
@@ -80,7 +85,7 @@ final modelsProvider = StreamProvider<ModelsSnapshot>((ref) async* {
     try {
       yield await client.models();
     } catch (e) {
-      yield ModelsSnapshot(gatewayError: '$e');
+      yield ModelsSnapshot(gatewayError: '$e', gatewayErrorCause: e);
     }
     await Future<void>.delayed(const Duration(seconds: 3));
   }
@@ -183,16 +188,47 @@ class ChatListController extends StateNotifier<List<Chat>> {
     await _store.deleteChat(id);
     await refresh();
   }
+
+  Future<void> rename(String id, String title) async {
+    final chat = state.where((c) => c.id == id).firstOrNull;
+    if (chat == null) return;
+    await _store.upsertChat(
+        chat.copyWith(title: title, updatedAt: DateTime.now()));
+    await refresh();
+  }
+
+  /// Das zuletzt benutzte Modell — damit ein neuer Chat nicht jedes Mal
+  /// eine Auswahl verlangt. Die Liste ist nach `updated_at` sortiert.
+  ModelRef? get lastModel => state.map((c) => c.model).nonNulls.firstOrNull;
 }
 
 final chatListProvider =
     StateNotifierProvider<ChatListController, List<Chat>>(
         (ref) => ChatListController(ref.watch(storeProvider)));
 
-final activeChatIdProvider = StateProvider<String?>((ref) => null);
+/// Der offene Chat. Überlebt einen Neustart: wer die App aus dem Speicher
+/// geworfen bekommt, will danach im selben Gespräch weitermachen.
+final activeChatIdProvider = StateProvider<String?>((ref) {
+  final prefs = ref.watch(prefsProvider);
+  ref.listenSelf((_, next) {
+    if (next == null) {
+      prefs.remove(_activeChatKey);
+    } else {
+      prefs.setString(_activeChatKey, next);
+    }
+  });
+  return prefs.getString(_activeChatKey);
+});
 
-/// Ein Controller pro Chat. Die Modellliste wird hineingereicht, damit der
-/// Controller Kontextgrenze und Ladezustand kennt, ohne selbst zu pollen.
+const _activeChatKey = 'active_chat';
+
+/// Gewählter Bereich der Navigation. Ein Provider statt lokalem Zustand,
+/// damit etwa der Verbindungshinweis im Chat direkt in die Einstellungen
+/// springen kann.
+enum ShellTab { chat, models, system, settings }
+
+final shellTabProvider = StateProvider<ShellTab>((ref) => ShellTab.chat);
+
 /// Ein Controller pro Chat. Modellliste und Kalibrierung werden **nachgereicht**
 /// statt mit `watch` gelesen: ein FutureProvider wechselt von `loading` auf
 /// `data`, und jedes `watch` darauf würde den Controller mitten im Stream
@@ -205,6 +241,7 @@ final chatControllerProvider =
     store: ref.watch(storeProvider),
     client: ref.watch(gatewayClientProvider),
     calibrations: const {},
+    loadFor: (model) => ref.read(loadSettingsProvider.notifier).forModel(model),
   );
 
   ref.listen<AsyncValue<Map<String, ModelCalibration>>>(calibrationsProvider,
@@ -219,6 +256,79 @@ final chatControllerProvider =
   }, fireImmediately: true);
 
   return controller;
+});
+
+// --- Ladeoptionen und Downloads --------------------------------------------
+
+/// Ladeoptionen pro Modell, auf dem Gerät gespeichert. Das Gateway merkt sich
+/// nichts davon: es bekommt die Optionen mit jeder Anfrage.
+class LoadSettingsController extends StateNotifier<Map<String, LoadSettings>> {
+  LoadSettingsController(this._prefs) : super(_read(_prefs));
+
+  static const _key = 'load_settings';
+  final SharedPreferences _prefs;
+
+  static String keyOf(ModelRef ref) => '${ref.backend.wire}|${ref.id}';
+
+  static Map<String, LoadSettings> _read(SharedPreferences prefs) {
+    try {
+      final raw = jsonDecode(prefs.getString(_key) ?? '{}') as Map;
+      return {
+        for (final e in raw.entries)
+          if (e.value is Map<String, dynamic>)
+            e.key as String: LoadSettings.fromJson(e.value as Map<String, dynamic>),
+      };
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  LoadSettings forModel(ModelRef ref) =>
+      state[keyOf(ref)] ?? LoadSettings.standard;
+
+  Future<void> set(ModelRef ref, LoadSettings value) async {
+    final next = {...state};
+    if (value.isDefault) {
+      next.remove(keyOf(ref));
+    } else {
+      next[keyOf(ref)] = value;
+    }
+    state = next;
+    await _prefs.setString(
+        _key, jsonEncode({for (final e in next.entries) e.key: e.value.toJson()}));
+  }
+}
+
+final loadSettingsProvider =
+    StateNotifierProvider<LoadSettingsController, Map<String, LoadSettings>>(
+        (ref) => LoadSettingsController(ref.watch(prefsProvider)));
+
+/// Laufende und kürzlich beendete Downloads. Pollt nur, solange jemand
+/// zusieht (autoDispose), und schneller, solange etwas läuft.
+final pullsProvider = StreamProvider.autoDispose<PullsSnapshot>((ref) async* {
+  final client = ref.watch(gatewayClientProvider);
+  if (!client.isConfigured) {
+    yield const PullsSnapshot();
+    return;
+  }
+  var lief = false;
+  while (true) {
+    var naechste = const Duration(seconds: 10);
+    try {
+      final snap = await client.pulls();
+      yield snap;
+      // Ein Download ist gerade fertig geworden: die Modellliste soll das
+      // neue Modell zeigen, ohne auf ihre nächste Runde zu warten.
+      if (lief && !snap.anyRunning) ref.invalidate(modelsProvider);
+      lief = snap.anyRunning;
+      if (lief) naechste = const Duration(seconds: 1);
+    } catch (_) {
+      // Ältere Gateways kennen die Route nicht — dann gibt es eben keine
+      // Downloads, statt eines Fehlers auf der Modellseite.
+      yield const PullsSnapshot();
+    }
+    await Future<void>.delayed(naechste);
+  }
 });
 
 final calibrationsProvider =
