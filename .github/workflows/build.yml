@@ -202,6 +202,11 @@ jobs:
           [ -n "$SHA" ] || { echo "$AUSGABE"; echo "::error::Kein Signaturzertifikat gefunden"; exit 1; }
           # Play Console und keytool schreiben ihn gross und mit Doppelpunkten.
           MIT_DOPPELPUNKT="$(tr 'a-f' 'A-F' <<< "$SHA" | sed 's/../&:/g; s/:$//')"
+          # Die Gradle-Meldung aus signing.gradle verschluckt `flutter build`
+          # - deshalb steht hier, womit wirklich signiert wurde.
+          if grep -q 'CN=Android Debug' <<< "$DN"; then
+            echo "::warning title=Debug-Schluessel::Signiert mit dem Debug-Schluessel - die Signier-Secrets fehlen oder sind unvollstaendig."
+          fi
           echo "Zertifikat:          $DN"
           echo "SHA-256:             $SHA"
           echo "SHA-256 (Play):      $MIT_DOPPELPUNKT"
