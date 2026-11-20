@@ -120,6 +120,14 @@ Unter *Settings → Secrets and variables → Actions* anlegen:
 
 Mit Präfix `ANDROID_` (`ANDROID_KEYSTORE_BASE64` usw.) geht es genauso.
 
+**Paketnamen bei Google registrieren** (Identitätsbestätigung für
+Android-Entwickler): Die Play Console zeigt ein Snippet und verlangt eine mit
+dem Upload-Schlüssel signierte APK, die es unter
+`assets/adi-registration.properties` enthält. Das Snippet als Secret
+`ADI_REGISTRATION` anlegen, dann *Actions → build → Run workflow* mit
+*nur bauen* starten und die APK aus dem Artefakt `apk` hochladen. Der
+Workflow prüft, dass die Datei in der APK steckt.
+
 Mit `PLAY_SERVICE_ACCOUNT_JSON` lädt ein Release das App Bundle zusätzlich als
 **Entwurf in die interne Testspur** hoch; freigegeben wird in der Play Console.
 Den allerersten Upload einer App nimmt die Play-API nicht an — die erste
