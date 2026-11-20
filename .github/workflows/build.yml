@@ -129,6 +129,10 @@ jobs:
       # Beide Schreibweisen gelten: ANDROID_KEYSTORE_BASE64 oder
       # KEYSTORE_BASE64 (ebenso PASSWORD, KEY_ALIAS, KEY_PASSWORD).
       KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 || secrets.KEYSTORE_BASE64 }}
+      # Snippet aus der Identitaetsbestaetigung der Play Console (Paketname
+      # registrieren). Eine Kennung des Kontos - deshalb Secret statt Datei
+      # im oeffentlichen Repo.
+      ADI_SNIPPET: ${{ secrets.ADI_REGISTRATION }}
       # Ein Release ohne eigenen Schluessel waere nicht als Update
       # installierbar; dann lieber gar keins.
       REQUIRE_RELEASE_SIGNING: ${{ needs.version.outputs.release == 'true' && '1' || '0' }}
@@ -157,6 +161,14 @@ jobs:
           else
             echo "apply from: 'signing.gradle'" >> android/app/build.gradle
           fi
+      # Google prueft damit, dass der Inhaber des Paketnamens auch den
+      # Signierschluessel besitzt: dieselbe APK, mit dieser Datei unter
+      # assets/. Fuer die App selbst ist sie bedeutungslos.
+      - name: Eigentumsnachweis fuer Google einbinden
+        if: env.ADI_SNIPPET != ''
+        run: |
+          mkdir -p android/app/src/main/assets
+          printf '%s' "$ADI_SNIPPET" > android/app/src/main/assets/adi-registration.properties
       - name: Upload-Schluessel bereitstellen
         if: env.KEYSTORE_B64 != ''
         run: |
@@ -212,6 +224,11 @@ jobs:
           echo "SHA-256 (Play):      $MIT_DOPPELPUNKT"
           echo "::notice title=Signaturzertifikat SHA-256::$MIT_DOPPELPUNKT ($DN)"
           echo "sha256=$MIT_DOPPELPUNKT" >> "$GITHUB_OUTPUT"
+          if [ -n "${ADI_SNIPPET:-}" ]; then
+            unzip -l build/app/outputs/flutter-apk/app-release.apk | grep -q 'assets/adi-registration.properties' \
+              || { echo "::error::adi-registration.properties fehlt in der APK"; exit 1; }
+            echo "::notice title=Play-Eigentumsnachweis::APK enthaelt assets/adi-registration.properties - Artefakt 'apk' in der Play Console hochladen."
+          fi
       # Laeufer sind Wegwerfmaschinen, aber der Schluessel soll keinen
       # Schritt laenger existieren als noetig.
       - name: Schluessel entfernen
