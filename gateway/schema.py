@@ -127,6 +127,12 @@ class GpuSample(BaseModel):
     util_percent: Fact[float] = Field(default_factory=Fact)
     vram_used_bytes: Fact[int] = Field(default_factory=Fact)
     vram_total_bytes: Fact[int] = Field(default_factory=Fact)
+    #: Was die Karte im System-RAM belegt ("Gemeinsamer GPU-Speicher" im
+    #: Task-Manager). Bei einer dedizierten Karte heisst ein grosser Wert:
+    #: der VRAM reicht nicht, Windows lagert still aus, und jeder Zugriff
+    #: geht ueber PCIe. Die Belegung von ``vram_used_bytes`` sieht dann
+    #: unauffaellig aus.
+    shared_used_bytes: Fact[int] = Field(default_factory=Fact)
     temp_c: Fact[float] = Field(default_factory=Fact)
     power_watts: Fact[float] = Field(default_factory=Fact)
 

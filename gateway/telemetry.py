@@ -14,6 +14,7 @@ import contextlib
 import json
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -79,6 +80,9 @@ def _probe_rocm_smi() -> list[GpuSample]:
                     int(total * _MIB) if total is not None else None,
                     "VRAM-Gesamtgroesse nicht in der rocm-smi-Ausgabe",
                 ),
+                shared_used_bytes=Fact.unsupported_because(
+                    "rocm-smi meldet die Belegung im System-RAM so nicht"
+                ),
                 temp_c=Fact.maybe(
                     as_float(pick(card, "temperature", "junction"))
                     or as_float(pick(card, "temperature", "edge")),
@@ -115,6 +119,8 @@ def _probe_amdgpu_top() -> list[GpuSample]:
         vram = dev.get("VRAM", {})
         used = (vram.get("Total VRAM Usage") or {}).get("value")
         total = (vram.get("Total VRAM") or {}).get("value")
+        # GTT: der Teil im System-RAM, das Gegenstueck zum geteilten Speicher.
+        gtt = (vram.get("Total GTT Usage") or {}).get("value")
         sensors = dev.get("Sensors", {})
 
         def sensor(key: str) -> float | None:
@@ -140,6 +146,10 @@ def _probe_amdgpu_top() -> list[GpuSample]:
                 vram_total_bytes=Fact.maybe(
                     int(total) * _MIB if isinstance(total, (int, float)) else None,
                     "VRAM-Gesamtgroesse nicht in der Ausgabe",
+                ),
+                shared_used_bytes=Fact.maybe(
+                    int(gtt) * _MIB if isinstance(gtt, (int, float)) else None,
+                    "GTT-Belegung nicht in der Ausgabe",
                 ),
                 temp_c=Fact.maybe(
                     sensor("Junction Temperature") or sensor("Edge Temperature"),
@@ -193,6 +203,9 @@ def _probe_nvidia_smi() -> list[GpuSample]:
                 vram_total_bytes=Fact.maybe(
                     int(total * _MIB) if total is not None else None, "Wert nicht lesbar"
                 ),
+                shared_used_bytes=Fact.unsupported_because(
+                    "nvidia-smi meldet die Belegung im System-RAM nicht"
+                ),
                 temp_c=Fact.maybe(num(4), "Wert nicht lesbar"),
                 power_watts=Fact.maybe(num(5), "Wert nicht lesbar"),
             )
@@ -223,6 +236,7 @@ class _WindowsZaehlerProbe:
 
         auslastung = self._zaehler.auslastung()
         speicher = self._zaehler.belegter_speicher()
+        geteilt = self._zaehler.geteilter_speicher()
 
         proben: list[GpuSample] = []
         for luid, karte in adapter.items():
@@ -247,6 +261,7 @@ class _WindowsZaehlerProbe:
                         karte.vram_total or None,
                         "DXGI nennt keine Gesamtgroesse",
                     ),
+                    shared_used_bytes=self._geteilt_fakt(geteilt, luid),
                     temp_c=Fact[float].unsupported_because(
                         "Windows-Leistungsindikatoren kennen keine Temperatur; "
                         "amdgpu_top oder nvidia-smi liefern sie"
@@ -261,6 +276,42 @@ class _WindowsZaehlerProbe:
             raise RuntimeError("Leistungsindikatoren nennen keine Grafikkarte")
         return proben
 
+    def _geteilt_fakt(self, geteilt: dict[str, int] | None, luid: str) -> Fact[int]:
+        if geteilt is None:
+            return Fact.unknown_because(
+                f"Zaehler fuer geteilten GPU-Speicher fehlt: "
+                f"{self._zaehler.geteilt_fehlt if self._zaehler else '?'}"
+            )
+        return Fact.maybe(geteilt.get(luid), "kein Zaehler fuer diesen Adapter")
+
+    def ergaenzen(self, proben: list[GpuSample]) -> list[GpuSample]:
+        """Geteilten Speicher in die Werte einer anderen Quelle eintragen.
+
+        amdgpu_top und nvidia-smi sehen nicht, was Windows in den System-RAM
+        verschiebt - die Leistungsindikatoren schon. Gerade dieser Wert
+        erklaert ein zaehes Modell, deshalb wird er hier nachgetragen.
+        """
+        if self._zaehler is None:
+            self._zaehler = windows_gpu.WindowsGpuZaehler()
+        geteilt = self._zaehler.geteilter_speicher()
+        if geteilt is None:
+            return proben
+        adapter = windows_gpu.adapter_lesen()
+        ergebnis: list[GpuSample] = []
+        for probe in proben:
+            if probe.shared_used_bytes.value is None:
+                luid = windows_gpu.karte_zuordnen(
+                    probe.name, probe.vram_total_bytes.value, adapter
+                )
+                if luid is not None and luid in geteilt:
+                    probe = probe.model_copy(
+                        update={"shared_used_bytes": Fact.of(geteilt[luid])}
+                    )
+            ergebnis.append(probe)
+        return ergebnis
+
+
+_WINDOWS = _WindowsZaehlerProbe()
 
 _PROBES: list[tuple[str, Callable[[], list[GpuSample]]]] = [
     ("rocm-smi", _probe_rocm_smi),
@@ -268,7 +319,7 @@ _PROBES: list[tuple[str, Callable[[], list[GpuSample]]]] = [
     ("nvidia-smi", _probe_nvidia_smi),
     # Zuletzt: die anderen Quellen liefern zusaetzlich Temperatur und
     # Leistungsaufnahme. Wo sie fehlen, ist das hier besser als nichts.
-    ("windows-counters", _WindowsZaehlerProbe()),
+    ("windows-counters", _WINDOWS),
 ]
 
 
@@ -302,6 +353,13 @@ class TelemetryReader:
     def sample(self) -> TelemetrySample:
         memory = psutil.virtual_memory()
         gpus, note = self._gpus()
+        if sys.platform == "win32" and any(
+            g.shared_used_bytes.value is None for g in gpus
+        ):
+            # Ohne den Wert bleibt die Begruendung der Quelle stehen; ein
+            # fehlender Zaehler darf die uebrige Telemetrie nicht kippen.
+            with contextlib.suppress(Exception):
+                gpus = _WINDOWS.ergaenzen(gpus)
         return TelemetrySample(
             at=datetime.now(timezone.utc),
             cpu_percent=Fact.of(psutil.cpu_percent(interval=None)),

@@ -12,9 +12,12 @@ import sys
 
 import pytest
 
+from gateway.schema import Fact, GpuSample
 from gateway.windows_gpu import (
+    Adapter,
     _luid_aus_instanz,
     auslastung_aus_zaehlern,
+    karte_zuordnen,
     speicher_aus_zaehlern,
 )
 
@@ -135,10 +138,104 @@ class TestBezugspunkt:
         z._pdh = FakePdh()
         z._engine = ("abfrage-engine", "zaehler")
         z._speicher = ("abfrage-speicher", "zaehler")
+        z._geteilt = ("abfrage-geteilt", "zaehler")
 
         z._bezugspunkt()
 
-        assert z._pdh.aufrufe == 2, "beide Abfragen brauchen einen Bezugspunkt"
+        assert z._pdh.aufrufe == 3, "alle Abfragen brauchen einen Bezugspunkt"
+
+    def test_fehlender_zaehler_fuer_geteilten_speicher_stoert_nicht(self):
+        from gateway.windows_gpu import WindowsGpuZaehler
+
+        class FakePdh:
+            aufrufe = 0
+
+            def PdhCollectQueryData(self, abfrage):
+                FakePdh.aufrufe += 1
+                return 0
+
+        z = object.__new__(WindowsGpuZaehler)
+        z._pdh = FakePdh()
+        z._engine = ("e", "z")
+        z._speicher = ("s", "z")
+        z._geteilt = None
+        z.geteilt_fehlt = "Zaehler nicht verfuegbar"
+
+        z._bezugspunkt()
+        assert FakePdh.aufrufe == 2
+        assert z.geteilter_speicher() is None
+
+
+GIB = 1024**3
+KARTEN = {
+    RX: Adapter(RX, "AMD Radeon RX 9060 XT", "amd", 16 * GIB),
+    IGPU: Adapter(IGPU, "AMD Radeon(TM) Graphics", "amd", 512 * 1024**2),
+}
+
+
+class TestZuordnung:
+    """Werte anderer Quellen bekommen den geteilten Speicher nachgetragen.
+
+    amdgpu_top kennt keine LUID; eine falsche Zuordnung truege dem Nutzer den
+    Speicher der integrierten Grafik als Auslagerung der Karte vor.
+    """
+
+    def test_ueber_den_namen(self):
+        assert karte_zuordnen("AMD  Radeon RX 9060 XT", None, KARTEN) == RX
+
+    def test_ueber_die_groesse_wenn_der_name_abweicht(self):
+        assert karte_zuordnen("Navi 44", int(15.9 * GIB), KARTEN) == RX
+
+    def test_zwei_gleich_grosse_karten_bleiben_offen(self):
+        karten = dict(KARTEN)
+        karten["0x1_0x2"] = Adapter("0x1_0x2", "Andere Karte", "amd", 16 * GIB)
+        assert karte_zuordnen("Navi 44", 16 * GIB, karten) is None
+
+    def test_ohne_name_und_groesse_keine_zuordnung(self):
+        assert karte_zuordnen("Navi 44", None, KARTEN) is None
+
+
+class TestErgaenzen:
+    def _probe(self, monkeypatch, geteilt):
+        from gateway import telemetry, windows_gpu
+
+        class FakeZaehler:
+            def geteilter_speicher(self):
+                return geteilt
+
+        probe = telemetry._WindowsZaehlerProbe()
+        probe._zaehler = FakeZaehler()
+        monkeypatch.setattr(windows_gpu, "adapter_lesen", lambda: KARTEN)
+        return probe
+
+    def _sample(self, **kw):
+        return GpuSample(
+            name="AMD Radeon RX 9060 XT",
+            vendor="amd",
+            source="amdgpu_top",
+            vram_total_bytes=Fact.of(16 * GIB),
+            **kw,
+        )
+
+    def test_traegt_den_wert_der_passenden_karte_ein(self, monkeypatch):
+        probe = self._probe(monkeypatch, {RX: 8 * GIB, IGPU: 3 * GIB})
+        [ergebnis] = probe.ergaenzen([self._sample()])
+        assert ergebnis.shared_used_bytes.value == 8 * GIB
+
+    def test_ueberschreibt_keinen_gemessenen_wert(self, monkeypatch):
+        probe = self._probe(monkeypatch, {RX: 8 * GIB})
+        [ergebnis] = probe.ergaenzen(
+            [self._sample(shared_used_bytes=Fact.of(1 * GIB))]
+        )
+        assert ergebnis.shared_used_bytes.value == 1 * GIB
+
+    def test_ohne_zaehler_bleibt_die_begruendung(self, monkeypatch):
+        probe = self._probe(monkeypatch, None)
+        sample = self._sample(
+            shared_used_bytes=Fact.unsupported_because("amdgpu_top meldet nichts")
+        )
+        [ergebnis] = probe.ergaenzen([sample])
+        assert ergebnis.shared_used_bytes.note == "amdgpu_top meldet nichts"
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="nur unter Windows")

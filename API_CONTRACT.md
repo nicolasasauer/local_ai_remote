@@ -261,6 +261,7 @@ Ein Sample pro Sekunde. Auch hier ist jeder Messwert ein `Fact`:
       "util_percent":    { "value": 78.0, "certainty": "known", "note": null },
       "vram_used_bytes": { "value": 19300000000, "certainty": "known", "note": null },
       "vram_total_bytes":{ "value": 25757220864, "certainty": "known", "note": null },
+      "shared_used_bytes":{ "value": 8589934592, "certainty": "known", "note": null },
       "temp_c":          { "value": 61.0, "certainty": "known", "note": null },
       "power_watts":     { "value": null, "certainty": "unknown",
                            "note": "Leistungsaufnahme nicht ausgelesen" }
@@ -273,6 +274,21 @@ Ein Sample pro Sekunde. Auch hier ist jeder Messwert ein `Fact`:
 `source` nennt die Quelle, aus der die Werte stammen: `rocm-smi`,
 `amdgpu_top` oder `nvidia-smi`. Die Quellen werden in dieser Reihenfolge
 probiert; die erste, die trägt, wird gemerkt.
+
+`shared_used_bytes` ist, was die Karte im System-RAM belegt — im
+Task-Manager „Gemeinsamer GPU-Speicher“. Reicht der VRAM nicht, legt der
+Treiber den Rest still dort ab, statt einen Fehler zu melden: `vram_used_bytes`
+sieht dann unauffällig aus, die Antworten werden aber um ein Vielfaches
+langsamer. Unter Windows kommt der Wert aus den Leistungsindikatoren
+(`\GPU Adapter Memory(*)\Shared Usage`) und wird auch dann nachgetragen, wenn
+eine andere Quelle die übrigen Werte liefert — zugeordnet über Name oder
+VRAM-Größe, und nur, wenn genau eine Karte passt. `amdgpu_top` liefert unter
+Linux die GTT-Belegung; `rocm-smi` und `nvidia-smi` melden den Wert nicht.
+
+Die App behandelt die Karte mit dem meisten eigenen VRAM als die, auf der die
+Modelle laufen — nicht die erste der Liste. Windows nennt zuerst die Karte, an
+der der Monitor hängt, und das ist oft die integrierte Grafik. Ab 1 GiB
+geteiltem Speicher bei einer Karte mit mindestens 2 GiB VRAM warnt die App.
 
 **Alle GPU-Felder außer `name`, `vendor` und `source` können `unknown` sein.**
 Je nach Treiberstand fehlen einzelne Werte. Die App zeigt sie als `—` mit
