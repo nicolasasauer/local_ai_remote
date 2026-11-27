@@ -20,6 +20,7 @@ import 'widgets/context_bar.dart';
 import 'widgets/instruments.dart';
 import 'widgets/message_view.dart';
 import 'widgets/phase_bar.dart';
+import 'widgets/spill_note.dart';
 
 class ChatPage extends ConsumerStatefulWidget {
   const ChatPage({required this.chat, this.onOpenList, super.key});
@@ -575,54 +576,60 @@ class _MiniTelemetry extends ConsumerWidget {
 
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Expanded(
-            child: Instrument(
-              label: 'CPU',
-              compact: true,
-              color: Tone.teal,
-              stale: feed.isStale,
-              series: feed.seriesCpu(),
-              value: InstrumentValue(
-                latest.cpuPercent,
-                format: (v) => v.toStringAsFixed(0),
-                unit: '%',
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Instrument(
-              label: 'RAM',
-              compact: true,
-              color: Tone.violet,
-              stale: feed.isStale,
-              series: feed.seriesRam(),
-              value: Text(
-                latest.ramFraction == null
-                    ? '—'
-                    : '${(latest.ramFraction! * 100).toStringAsFixed(0)} %',
-              ),
-            ),
-          ),
-          if (gpu != null) ...[
-            const SizedBox(width: 8),
-            Expanded(
-              child: Instrument(
-                label: 'GPU',
-                compact: true,
-                color: Tone.amber,
-                stale: feed.isStale,
-                series: feed.seriesGpu(),
-                value: InstrumentValue(
-                  gpu.utilPercent,
-                  format: (v) => v.toStringAsFixed(0),
-                  unit: '%',
+          Row(
+            children: [
+              Expanded(
+                child: Instrument(
+                  label: 'CPU',
+                  compact: true,
+                  color: Tone.teal,
+                  stale: feed.isStale,
+                  series: feed.seriesCpu(),
+                  value: InstrumentValue(
+                    latest.cpuPercent,
+                    format: (v) => v.toStringAsFixed(0),
+                    unit: '%',
+                  ),
                 ),
               ),
-            ),
-          ],
+              const SizedBox(width: 8),
+              Expanded(
+                child: Instrument(
+                  label: 'RAM',
+                  compact: true,
+                  color: Tone.violet,
+                  stale: feed.isStale,
+                  series: feed.seriesRam(),
+                  value: Text(
+                    latest.ramFraction == null
+                        ? '—'
+                        : '${(latest.ramFraction! * 100).toStringAsFixed(0)} %',
+                  ),
+                ),
+              ),
+              if (gpu != null) ...[
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Instrument(
+                    label: 'GPU',
+                    compact: true,
+                    color: Tone.amber,
+                    stale: feed.isStale,
+                    series: feed.seriesGpu(),
+                    value: InstrumentValue(
+                      gpu.utilPercent,
+                      format: (v) => v.toStringAsFixed(0),
+                      unit: '%',
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          if (gpu != null) SpillNote(gpu: gpu, compact: true),
         ],
       ),
     );
@@ -999,7 +1006,6 @@ class _Freigabe extends StatelessWidget {
   }
 }
 
-
 /// Temperatur und Denkschritte für diesen Chat. Änderungen gelten sofort für
 /// die nächste Anfrage.
 class _BehaviourSheet extends ConsumerWidget {
@@ -1025,7 +1031,10 @@ class _BehaviourSheet extends ConsumerWidget {
             const Text(
               'Antwortverhalten',
               style: TextStyle(
-                  fontSize: 15, fontWeight: FontWeight.w600, color: Tone.ink),
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: Tone.ink,
+              ),
             ),
             const SizedBox(height: 4),
             const Text(
@@ -1036,11 +1045,15 @@ class _BehaviourSheet extends ConsumerWidget {
             Row(
               children: [
                 const Expanded(
-                  child: Text('Temperatur',
-                      style: TextStyle(fontSize: 13, color: Tone.ink)),
+                  child: Text(
+                    'Temperatur',
+                    style: TextStyle(fontSize: 13, color: Tone.ink),
+                  ),
                 ),
                 Text(
-                  temp == null ? 'Vorgabe des Modells' : temp.toStringAsFixed(1),
+                  temp == null
+                      ? 'Vorgabe des Modells'
+                      : temp.toStringAsFixed(1),
                   style: kMono.copyWith(fontSize: 12.5, color: Tone.muted),
                 ),
                 Switch(
@@ -1056,22 +1069,30 @@ class _BehaviourSheet extends ConsumerWidget {
                 max: 2,
                 divisions: 20,
                 label: temp.toStringAsFixed(1),
-                onChanged: (v) => controller.setTemperature(
-                    double.parse(v.toStringAsFixed(1))),
+                onChanged:
+                    (v) => controller.setTemperature(
+                      double.parse(v.toStringAsFixed(1)),
+                    ),
               ),
               const Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('genau, wiederholbar',
-                      style: TextStyle(fontSize: 11, color: Tone.faint)),
-                  Text('einfallsreich, sprunghaft',
-                      style: TextStyle(fontSize: 11, color: Tone.faint)),
+                  Text(
+                    'genau, wiederholbar',
+                    style: TextStyle(fontSize: 11, color: Tone.faint),
+                  ),
+                  Text(
+                    'einfallsreich, sprunghaft',
+                    style: TextStyle(fontSize: 11, color: Tone.faint),
+                  ),
                 ],
               ),
             ],
             const SizedBox(height: 18),
-            const Text('Denkschritte',
-                style: TextStyle(fontSize: 13, color: Tone.ink)),
+            const Text(
+              'Denkschritte',
+              style: TextStyle(fontSize: 13, color: Tone.ink),
+            ),
             const SizedBox(height: 8),
             SegmentedButton<ThinkMode>(
               showSelectedIcon: false,
@@ -1090,7 +1111,10 @@ class _BehaviourSheet extends ConsumerWidget {
                   : '„Aus" antwortet bei Reasoning-Modellen deutlich schneller, '
                       'dafür bei kniffligen Fragen weniger gründlich.',
               style: const TextStyle(
-                  fontSize: 11.5, color: Tone.faint, height: 1.4),
+                fontSize: 11.5,
+                color: Tone.faint,
+                height: 1.4,
+              ),
             ),
           ],
         ),

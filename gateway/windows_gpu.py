@@ -149,6 +149,11 @@ _PDH_MORE_DATA = 0x800007D2
 
 _PFAD_ENGINE = r"\GPU Engine(*)\Utilization Percentage"
 _PFAD_SPEICHER = r"\GPU Adapter Memory(*)\Dedicated Usage"
+#: Was eine Karte im System-RAM belegt - im Task-Manager "Gemeinsamer
+#: GPU-Speicher". Reicht der VRAM nicht, legt der Treiber den Rest still dort
+#: ab, statt einen Fehler zu melden; die Belegung des VRAM sieht dann
+#: unauffaellig aus, die Antworten werden aber um ein Vielfaches langsamer.
+_PFAD_GETEILT = r"\GPU Adapter Memory(*)\Shared Usage"
 
 
 class _Wert(ctypes.Union):
@@ -228,6 +233,14 @@ class WindowsGpuZaehler:
         self._pdh = ctypes.WinDLL("pdh")
         self._engine = self._oeffnen(_PFAD_ENGINE)
         self._speicher = self._oeffnen(_PFAD_SPEICHER)
+        # Optional: fehlt der Zaehler, sollen Auslastung und VRAM trotzdem
+        # kommen. Der Grund bleibt stehen und wird mit ausgeliefert.
+        self._geteilt: tuple[wintypes.HANDLE, wintypes.HANDLE] | None = None
+        self.geteilt_fehlt: str | None = None
+        try:
+            self._geteilt = self._oeffnen(_PFAD_GETEILT)
+        except OSError as exc:
+            self.geteilt_fehlt = str(exc)
         # Bezugspunkt setzen, damit der erste echte Aufruf schon Werte hat.
         # Direkt sammeln statt ueber `_sammeln`: das ist ein Generator, und
         # ein nicht ausgelesener Generator fuehrt gar nichts aus - der
@@ -235,8 +248,9 @@ class WindowsGpuZaehler:
         self._bezugspunkt()
 
     def _bezugspunkt(self) -> None:
-        for abfrage, _ in (self._engine, self._speicher):
-            self._pdh.PdhCollectQueryData(abfrage)
+        for paar in (self._engine, self._speicher, self._geteilt):
+            if paar is not None:
+                self._pdh.PdhCollectQueryData(paar[0])
 
     def _oeffnen(self, pfad: str) -> tuple[wintypes.HANDLE, wintypes.HANDLE]:
         abfrage = wintypes.HANDLE()
@@ -288,3 +302,37 @@ class WindowsGpuZaehler:
 
     def belegter_speicher(self) -> dict[str, int]:
         return speicher_aus_zaehlern(self._sammeln(self._speicher))
+
+    def geteilter_speicher(self) -> dict[str, int] | None:
+        """``None``, wenn der Zaehler fehlt - der Grund steht in ``geteilt_fehlt``."""
+        if self._geteilt is None:
+            return None
+        return speicher_aus_zaehlern(self._sammeln(self._geteilt))
+
+
+def karte_zuordnen(
+    name: str, vram_total: int | None, adapter: dict[str, Adapter]
+) -> str | None:
+    """Die LUID zu einer Karte, die ein anderes Werkzeug gemeldet hat.
+
+    amdgpu_top oder nvidia-smi kennen keine LUID. Zugeordnet wird deshalb
+    zuerst ueber den Namen, dann ueber die Groesse des VRAM - aber nur, wenn
+    genau eine Karte passt. Zwei gleich grosse Karten bleiben ohne Zuordnung:
+    ein Wert der falschen Karte waere schlimmer als keiner.
+    """
+    gesucht = " ".join(name.casefold().split())
+    nach_name = [
+        luid
+        for luid, karte in adapter.items()
+        if " ".join(karte.name.casefold().split()) == gesucht
+    ]
+    if len(nach_name) == 1:
+        return nach_name[0]
+    if not vram_total:
+        return None
+    nach_groesse = [
+        luid
+        for luid, karte in adapter.items()
+        if karte.vram_total and abs(karte.vram_total - vram_total) <= 0.03 * vram_total
+    ]
+    return nach_groesse[0] if len(nach_groesse) == 1 else None

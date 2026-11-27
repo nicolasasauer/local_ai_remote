@@ -8,6 +8,7 @@ import '../../state/providers.dart';
 import '../../theme.dart';
 import '../errors.dart';
 import '../format.dart';
+import 'spill_note.dart';
 
 /// Ladeoptionen eines Modells: Kontextfenster, Haltedauer, GPU — und
 /// "Jetzt laden", damit die erste Antwort nicht aufs Laden wartet.
@@ -45,8 +46,9 @@ class _LoadOptionsPanelState extends ConsumerState<LoadOptionsPanel> {
   @override
   Widget build(BuildContext context) {
     ref.watch(loadSettingsProvider);
-    final settings =
-        ref.read(loadSettingsProvider.notifier).forModel(model.ref);
+    final settings = ref
+        .read(loadSettingsProvider.notifier)
+        .forModel(model.ref);
     final gatewayMax = ref.watch(healthProvider).valueOrNull?.maxContext;
     final stufen = contextChoices(
       modelMax: model.contextLength.value,
@@ -58,7 +60,8 @@ class _LoadOptionsPanelState extends ConsumerState<LoadOptionsPanel> {
 
     final geladen = model.loadedContextLength.value;
     final gewuenscht = settings.contextLength;
-    final abweichung = model.isLoaded &&
+    final abweichung =
+        model.isLoaded &&
         geladen != null &&
         gewuenscht != null &&
         geladen != gewuenscht;
@@ -78,20 +81,28 @@ class _LoadOptionsPanelState extends ConsumerState<LoadOptionsPanel> {
             items: [
               const DropdownMenuItem(value: null, child: Text('Vorgabe')),
               for (final s in stufen)
-                DropdownMenuItem(value: s, child: Text('${formatCount(s)} tok')),
+                DropdownMenuItem(
+                  value: s,
+                  child: Text('${formatCount(s)} tok'),
+                ),
               // Ein gespeicherter Wert außerhalb der Stufen (Modell
               // gewechselt, Grenze gesenkt) bleibt sichtbar, statt als
               // "Vorgabe" zu erscheinen, während er weiter gesendet wird.
               if (gewuenscht != null && !stufen.contains(gewuenscht))
                 DropdownMenuItem(
                   value: gewuenscht,
-                  child: Text('${formatCount(gewuenscht)} tok ⚠',
-                      style: const TextStyle(color: Tone.amber)),
+                  child: Text(
+                    '${formatCount(gewuenscht)} tok ⚠',
+                    style: const TextStyle(color: Tone.amber),
+                  ),
                 ),
             ],
-            onChanged: (v) => set(v == null
-                ? settings.copyWith(clearContext: true)
-                : settings.copyWith(contextLength: v)),
+            onChanged:
+                (v) => set(
+                  v == null
+                      ? settings.copyWith(clearContext: true)
+                      : settings.copyWith(contextLength: v),
+                ),
           ),
         ),
         const Padding(
@@ -113,9 +124,12 @@ class _LoadOptionsPanelState extends ConsumerState<LoadOptionsPanel> {
                 label: Text(text, style: const TextStyle(fontSize: 12)),
                 selected: settings.keepAliveSeconds == sekunden,
                 visualDensity: VisualDensity.compact,
-                onSelected: (_) => set(sekunden == null
-                    ? settings.copyWith(clearKeepAlive: true)
-                    : settings.copyWith(keepAliveSeconds: sekunden)),
+                onSelected:
+                    (_) => set(
+                      sekunden == null
+                          ? settings.copyWith(clearKeepAlive: true)
+                          : settings.copyWith(keepAliveSeconds: sekunden),
+                    ),
               ),
           ],
         ),
@@ -142,6 +156,8 @@ class _LoadOptionsPanelState extends ConsumerState<LoadOptionsPanel> {
             telemetry: ref.watch(telemetryProvider).latest,
           ),
         ),
+        if (ref.watch(telemetryProvider).latest?.primaryGpu case final gpu?)
+          SpillNote(gpu: gpu, compact: true),
         const SizedBox(height: 10),
         if (_lmStudio)
           const _Note(
@@ -176,13 +192,14 @@ class _LoadOptionsPanelState extends ConsumerState<LoadOptionsPanel> {
         const SizedBox(height: 4),
         FilledButton.icon(
           onPressed: _loading ? null : () => _loadNow(settings),
-          icon: _loading
-              ? const SizedBox(
-                  width: 15,
-                  height: 15,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.play_arrow_rounded, size: 18),
+          icon:
+              _loading
+                  ? const SizedBox(
+                    width: 15,
+                    height: 15,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                  : const Icon(Icons.play_arrow_rounded, size: 18),
           label: Text(_loading ? 'Wird geladen …' : 'Jetzt laden'),
         ),
       ],
@@ -217,17 +234,17 @@ class _Heading extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(top: 18, bottom: 8),
-        child: Text(
-          text.toUpperCase(),
-          style: const TextStyle(
-            fontSize: 11,
-            letterSpacing: 0.8,
-            color: Tone.muted,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      );
+    padding: const EdgeInsets.only(top: 18, bottom: 8),
+    child: Text(
+      text.toUpperCase(),
+      style: const TextStyle(
+        fontSize: 11,
+        letterSpacing: 0.8,
+        color: Tone.muted,
+        fontWeight: FontWeight.w600,
+      ),
+    ),
+  );
 }
 
 class _Label extends StatelessWidget {
@@ -236,10 +253,12 @@ class _Label extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 6),
-        child: Text(text,
-            style: const TextStyle(fontSize: 12.5, color: Tone.muted)),
-      );
+    padding: const EdgeInsets.only(bottom: 6),
+    child: Text(
+      text,
+      style: const TextStyle(fontSize: 12.5, color: Tone.muted),
+    ),
+  );
 }
 
 class _Row extends StatelessWidget {
@@ -249,17 +268,19 @@ class _Row extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 4),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(label,
-                  style: const TextStyle(fontSize: 12.5, color: Tone.muted)),
-            ),
-            child,
-          ],
+    padding: const EdgeInsets.only(bottom: 4),
+    child: Row(
+      children: [
+        Expanded(
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 12.5, color: Tone.muted),
+          ),
         ),
-      );
+        child,
+      ],
+    ),
+  );
 }
 
 class _Note extends StatelessWidget {
@@ -269,12 +290,13 @@ class _Note extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 10),
-        child: Text(text,
-            style: TextStyle(fontSize: 11.5, color: color, height: 1.4)),
-      );
+    padding: const EdgeInsets.only(bottom: 10),
+    child: Text(
+      text,
+      style: TextStyle(fontSize: 11.5, color: color, height: 1.4),
+    ),
+  );
 }
-
 
 /// Was das Modell mit diesen Einstellungen voraussichtlich belegt.
 class _EstimateView extends StatelessWidget {
@@ -288,19 +310,27 @@ class _EstimateView extends StatelessWidget {
     final gib = (int b) => '${formatGiB(b)} GiB';
 
     final (farbe, icon, urteil) = switch (e.fit) {
-      Fit.fits => (Tone.teal, Icons.check_circle_outline,
-          'Passt in den freien ${e.target}'),
-      Fit.tight => (Tone.amber, Icons.warning_amber_rounded,
-          'Knapp — ohne Reserve für Rechenpuffer; einzelne Schichten '
-              'landen womöglich auf der CPU'),
-      Fit.spills => (Tone.alert, Icons.error_outline,
-          e.target == 'Grafikspeicher'
-              ? 'Passt nicht — ein Teil läuft auf der CPU, Antworten werden '
-                  'deutlich langsamer'
-              : 'Passt nicht in den freien Arbeitsspeicher — der Desktop '
-                  'beginnt auszulagern'),
-      Fit.unknown => (Tone.muted, Icons.help_outline,
-          'Nicht abschätzbar'),
+      Fit.fits => (
+        Tone.teal,
+        Icons.check_circle_outline,
+        'Passt in den freien ${e.target}',
+      ),
+      Fit.tight => (
+        Tone.amber,
+        Icons.warning_amber_rounded,
+        'Knapp — ohne Reserve für Rechenpuffer; einzelne Schichten '
+            'landen womöglich auf der CPU',
+      ),
+      Fit.spills => (
+        Tone.alert,
+        Icons.error_outline,
+        e.target == 'Grafikspeicher'
+            ? 'Passt nicht — ein Teil läuft auf der CPU, Antworten werden '
+                'deutlich langsamer'
+            : 'Passt nicht in den freien Arbeitsspeicher — der Desktop '
+                'beginnt auszulagern',
+      ),
+      Fit.unknown => (Tone.muted, Icons.help_outline, 'Nicht abschätzbar'),
     };
 
     return Container(
@@ -316,13 +346,18 @@ class _EstimateView extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Text('Geschätzter Bedarf',
-                  style: TextStyle(fontSize: 12, color: Tone.muted)),
+              const Text(
+                'Geschätzter Bedarf',
+                style: TextStyle(fontSize: 12, color: Tone.muted),
+              ),
               const Spacer(),
               Text(
                 e.totalBytes == null ? '—' : '≈ ${gib(e.totalBytes!)}',
                 style: kMono.copyWith(
-                    fontSize: 13.5, color: Tone.ink, fontWeight: FontWeight.w600),
+                  fontSize: 13.5,
+                  color: Tone.ink,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ],
           ),
@@ -344,17 +379,24 @@ class _EstimateView extends StatelessWidget {
               Icon(icon, size: 15, color: farbe),
               const SizedBox(width: 7),
               Expanded(
-                child: Text(urteil,
-                    style: TextStyle(fontSize: 12, color: farbe, height: 1.35)),
+                child: Text(
+                  urteil,
+                  style: TextStyle(fontSize: 12, color: farbe, height: 1.35),
+                ),
               ),
             ],
           ),
           for (final r in e.reasons)
             Padding(
               padding: const EdgeInsets.only(top: 4, left: 22),
-              child: Text(r,
-                  style: const TextStyle(
-                      fontSize: 11, color: Tone.faint, height: 1.35)),
+              child: Text(
+                r,
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: Tone.faint,
+                  height: 1.35,
+                ),
+              ),
             ),
         ],
       ),

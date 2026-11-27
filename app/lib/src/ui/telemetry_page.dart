@@ -8,6 +8,7 @@ import '../theme.dart';
 import 'format.dart';
 import 'widgets/fact_view.dart';
 import 'widgets/instruments.dart';
+import 'widgets/spill_note.dart';
 
 class TelemetryPage extends ConsumerWidget {
   const TelemetryPage({super.key});
@@ -65,9 +66,10 @@ class TelemetryPage extends ConsumerWidget {
                     format: (v) => v.toStringAsFixed(0),
                     unit: '%',
                   ),
-                  fraction: latest.cpuPercent.value == null
-                      ? null
-                      : latest.cpuPercent.value! / 100,
+                  fraction:
+                      latest.cpuPercent.value == null
+                          ? null
+                          : latest.cpuPercent.value! / 100,
                 ),
                 Instrument(
                   label: 'Arbeitsspeicher',
@@ -76,18 +78,23 @@ class TelemetryPage extends ConsumerWidget {
                   stale: feed.isStale,
                   value: InstrumentValue(
                     Fact<double>(
-                      value: latest.ramUsedBytes.value == null
-                          ? null
-                          : latest.ramUsedBytes.value! / (1024 * 1024 * 1024),
+                      value:
+                          latest.ramUsedBytes.value == null
+                              ? null
+                              : latest.ramUsedBytes.value! /
+                                  (1024 * 1024 * 1024),
                       certainty: latest.ramUsedBytes.certainty,
                       note: latest.ramUsedBytes.note,
                     ),
                     format: (v) => v.toStringAsFixed(1),
                     unit: 'GiB',
                   ),
-                  detail: latest.ramTotalBytes.isKnown
-                      ? Text('von ${formatGiB(latest.ramTotalBytes.value!)} GiB')
-                      : const Text('Gesamtgröße unbekannt'),
+                  detail:
+                      latest.ramTotalBytes.isKnown
+                          ? Text(
+                            'von ${formatGiB(latest.ramTotalBytes.value!)} GiB',
+                          )
+                          : const Text('Gesamtgröße unbekannt'),
                   fraction: latest.ramFraction,
                 ),
                 if (gpu != null) ...[
@@ -102,9 +109,10 @@ class TelemetryPage extends ConsumerWidget {
                       unit: '%',
                     ),
                     detail: Text('Quelle: ${gpu.source}'),
-                    fraction: gpu.utilPercent.value == null
-                        ? null
-                        : gpu.utilPercent.value! / 100,
+                    fraction:
+                        gpu.utilPercent.value == null
+                            ? null
+                            : gpu.utilPercent.value! / 100,
                   ),
                   Instrument(
                     label: 'VRAM',
@@ -113,18 +121,23 @@ class TelemetryPage extends ConsumerWidget {
                     stale: feed.isStale,
                     value: InstrumentValue(
                       Fact<double>(
-                        value: gpu.vramUsedBytes.value == null
-                            ? null
-                            : gpu.vramUsedBytes.value! / (1024 * 1024 * 1024),
+                        value:
+                            gpu.vramUsedBytes.value == null
+                                ? null
+                                : gpu.vramUsedBytes.value! /
+                                    (1024 * 1024 * 1024),
                         certainty: gpu.vramUsedBytes.certainty,
                         note: gpu.vramUsedBytes.note,
                       ),
                       format: (v) => v.toStringAsFixed(1),
                       unit: 'GiB',
                     ),
-                    detail: gpu.vramTotalBytes.isKnown
-                        ? Text('von ${formatGiB(gpu.vramTotalBytes.value!)} GiB')
-                        : const Text('Gesamtgröße unbekannt'),
+                    detail:
+                        gpu.vramTotalBytes.isKnown
+                            ? Text(
+                              'von ${formatGiB(gpu.vramTotalBytes.value!)} GiB',
+                            )
+                            : const Text('Gesamtgröße unbekannt'),
                     fraction: gpu.vramFraction,
                   ),
                 ],
@@ -132,6 +145,7 @@ class TelemetryPage extends ConsumerWidget {
             ),
 
             if (gpu == null) _NoGpu(note: latest.gpuNote),
+            if (gpu != null) SpillNote(gpu: gpu),
             if (gpu != null) _GpuDetails(gpu: gpu),
 
             const SizedBox(height: 18),
@@ -179,6 +193,14 @@ class _GpuDetails extends StatelessWidget {
               mono: true,
             ),
           ),
+          FactRow(
+            'Im System-RAM',
+            FactText<int>(
+              gpu.sharedUsedBytes,
+              format: (v) => '${formatGiB(v)} GiB',
+              mono: true,
+            ),
+          ),
           FactRow('Hersteller', Text(gpu.vendor.toUpperCase())),
           FactRow('Auslesequelle', Text(gpu.source)),
         ],
@@ -209,8 +231,11 @@ class _NoGpu extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(Icons.videocam_off_outlined,
-                  size: 16, color: Tone.muted),
+              const Icon(
+                Icons.videocam_off_outlined,
+                size: 16,
+                color: Tone.muted,
+              ),
               const SizedBox(width: 8),
               Text(
                 'Keine GPU-Werte',
@@ -222,7 +247,11 @@ class _NoGpu extends StatelessWidget {
           Text(
             note ??
                 'Das Gateway hat keine GPU gemeldet und keinen Grund mitgeliefert.',
-            style: const TextStyle(fontSize: 12.5, color: Tone.muted, height: 1.45),
+            style: const TextStyle(
+              fontSize: 12.5,
+              color: Tone.muted,
+              height: 1.45,
+            ),
           ),
           const SizedBox(height: 8),
           const Text(
