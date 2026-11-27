@@ -32,6 +32,7 @@ ersetzt, die App-Tests nutzen eine SQLite-Datenbank im Arbeitsspeicher.
 | `gateway/tests/test_tools.py` | Werkzeugaufrufe auf Adapter-Ebene: Ollamas Objekt-Argumente werden zum JSON-String, LM Studios Fragmente werden zusammengesetzt, `stop` wird zu `tool_calls`, und der Verlauf geht in der jeweils erwarteten Form zurück |
 | `gateway/tests/test_backends.py` | was die Adapter tatsächlich senden und wie sie die Antwort lesen — `think` bei Ollama, `stream_options` bei LM Studio, Denkschritte getrennt vom Antworttext, Modellverwechslung |
 | `app/test/gateway_client_test.dart` | SSE-Zerlegung, Denkschritte als eigener Ereignistyp, Fehler mitten im Stream, und dass ein Abbruch die Verbindung wirklich schliesst |
+| `gateway/tests/test_ladetest.py` | das Benchmark-Skript `tools/ladetest.py`: Varianten mit gleichem Kontext, MoE-Option kommt am SDK vorbei als eigenes Feld an, wirkungslose MoE-Option wird gemeldet, Fehler stehen in der Tabelle |
 | `app/test/telemetrie_test.dart` | die Modell-Karte ist die mit dem meisten VRAM, nicht die erste (integrierte Grafik); Auslagerungswarnung erst ab 1 GiB und nur bei dedizierten Karten; ein älteres Gateway ohne das Feld löst keine Warnung aus |
 | `app/test/chat_store_test.dart` | Umbenennen und Modellwechsel lassen den Verlauf stehen, Löschen räumt Nachrichten mit ab, `recoverInterrupted` markiert hängengebliebene Antworten, Denkschritte werden getrennt vom Antworttext persistiert |
 
@@ -182,3 +183,28 @@ verlässlichsten der Prozess selbst:
 ```bash
 python -c "import psutil,time; p=[x for x in psutil.process_iter(['name']) if x.info['name']=='llama-server.exe'][0]; p.cpu_percent(); time.sleep(2); print(p.cpu_percent(), '%')"
 ```
+
+## Ladeoptionen vergleichen (LM Studio)
+
+`tools/ladetest.py` lädt ein Modell nacheinander mit verschiedenen Optionen
+und misst Tokens pro Sekunde, Zeit bis zum ersten Token und — unter Windows —
+VRAM und geteilten GPU-Speicher. Läuft auf dem Desktop, mit LM Studio:
+
+```powershell
+pip install -r tools/requirements.txt
+lms ls                                   # Modellschlüssel nachsehen
+python -m tools.ladetest --modell <schlüssel> [--auch <q3-schlüssel>] [--alle-entladen]
+```
+
+| Variante | Einstellung |
+|---|---|
+| A | wie LM Studio ohne Vorgaben lädt |
+| B | alles auf die GPU, festes Kontextfenster |
+| C | B + Flash Attention + KV-Cache `q8_0` |
+| D | C + strikte VRAM-Grenze (`gpuStrictVramCap`) |
+| E25/E50/E75 | C + Anteil der MoE-Experten-Schichten im RAM |
+| F… | C mit einem weiteren Modell, z. B. kleinerem Quant |
+
+Die MoE-Option kennt das Python-SDK noch nicht; das Skript reicht sie unter
+dem Namen aus lmstudio-js nach. Belegen die E-Varianten denselben Speicher wie
+C, hat LM Studio sie ignoriert — das Skript sagt das dann.
